@@ -46,6 +46,8 @@ const TRUCK_DIMENSIONS = {
   height: 9
 };
 
+const TRUCK_VOLUME = TRUCK_DIMENSIONS.length * TRUCK_DIMENSIONS.height * TRUCK_DIMENSIONS.width;
+
 const TruckLoadingPrototype = () => {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
@@ -432,6 +434,15 @@ const TruckLoadingPrototype = () => {
     }
   }, [isDragging, dragOffset]);
 
+  // Calculate the used volume dynamically
+  const usedVolume = boxes.reduce((total,box) => {
+    const config = BOX_CONFIGS.find(c => c.id === box.type);
+    const volume = config.dimensions.width * config.dimensions.height * config.dimensions.depth;
+    return total + volume;
+  }, 0);
+
+  const volumePercentage = ((usedVolume / TRUCK_VOLUME)*100).toFixed(2);
+
   return (
     <div style={{
       width: '100vw',
@@ -477,7 +488,7 @@ const TruckLoadingPrototype = () => {
           </p>
         </div>
         
-        {/* Performance Stats */}
+        {/* Performance & Space Stats */}
         <div style={{
           display: 'flex',
           gap: '20px',
@@ -491,6 +502,15 @@ const TruckLoadingPrototype = () => {
           </div>
           <div>
             Boxes: <strong>{stats.boxCount || 0}</strong>
+          </div>
+          {/* Space Utilization Display */}
+          <div style={{
+            background: 'rgba(0,0,0,0.05)',
+            padding: '4px 10px',
+            borderRadius: '6px'
+          }}>
+            Space Used: <strong>{usedVolume.toFixed(2)} ft³</strong> / {TRUCK_VOLUME} ft³
+            <strong style={{ color: '#004E89', marginLeft: '6px' }}>({volumePercentage}%)</strong>
           </div>
         </div>
       </div>
