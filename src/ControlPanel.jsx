@@ -14,6 +14,7 @@ const ControlPanel = ({
   redo,
   isBoxDragging,
   dragControllerRef,
+  handleCameraView
 }) => {
   const [isPanelMinimized, setIsPanelMinimized] = useState(false);
   const [panelPosition, setPanelPosition] = useState({ x: 30, y: window.innerHeight - 420 });
@@ -180,6 +181,44 @@ const ControlPanel = ({
           >
             ↻ Rotate Box 90° (R)
           </button>
+
+          {/* Camera Controls */}
+            <div style={{ marginBottom: '16px' }}>
+              <h4 style={{ margin: '0 0 8px 0', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', color: '#666' }}>
+                Camera Views
+              </h4>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {['top', 'side', 'back', 'default'].map((view) => (
+                  <button
+                    key={view}
+                    onClick={() => handleCameraView(view)}
+                    style={{
+                      flex: 1,
+                      padding: '8px 0',
+                      background: '#f8f9fa',
+                      color: '#495057',
+                      border: '1px solid #dee2e6',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      textTransform: 'capitalize',
+                      transition: 'all 0.2s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.target.style.background = '#e9ecef';
+                      e.target.style.borderColor = '#ced4da';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.target.style.background = '#f8f9fa';
+                      e.target.style.borderColor = '#dee2e6';
+                    }}
+                  >
+                    {view}
+                  </button>
+                ))}
+              </div>
+            </div>
         </div>
       )}
     </div>

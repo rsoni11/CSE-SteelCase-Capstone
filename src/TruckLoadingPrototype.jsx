@@ -34,6 +34,10 @@ const TruckLoadingPrototype = () => {
 
   // ── Space utilization ──────────────────────────────────────────────────────
   const usedVolume = boxes.reduce((total, box) => {
+    const pos = box.mesh.position;
+    const isInsideTruck = pos.x > -30 && pos.x < 30 && pos.z > -10 && pos.z < 10;
+    if (!isInsideTruck) return total;
+
     const config = BOX_CONFIGS.find(c => c.id === box.type);
     if (!config) return total;
     const { width, height, depth } = config.dimensions;
@@ -63,6 +67,26 @@ const TruckLoadingPrototype = () => {
     return cleanup;
   }, []);
 
+  // ── Camera View ────────────────────────────────────────────────────────────
+  const handleCameraView = (view) => {
+    if (!cameraRef.current) return;
+    const camera = cameraRef.current;
+
+    switch(view) {
+      case 'top':
+        camera.position.set(0, 80, 0.1);
+        break;
+      case 'side':
+        camera.position.set(0, 4.5, 60);
+        break;
+      case 'back':
+        camera.position.set(-60, 4.5, 40);
+        break;
+      case 'default':
+        break;
+    }
+  };
+  
   // ── Add Box ────────────────────────────────────────────────────────────────
   const addBox = () => {
     if (boxes.length >= 50) {
@@ -181,6 +205,7 @@ const TruckLoadingPrototype = () => {
         redo={redo}
         isBoxDragging={isBoxDragging}
         dragControllerRef={dragControllerRef}
+        handleCameraView={handleCameraView}
       />
 
       <ControlsGuide />
