@@ -4,6 +4,7 @@ import * as THREE from 'three';
 export class CollisionSystem {
   constructor(cargoBoxes = []) {
     this.cargoBoxes = cargoBoxes;
+    this.overlapEpsilon = 1e-4;
   }
 
   wouldCollide(movingMesh, testPosition, size) {
@@ -25,10 +26,14 @@ export class CollisionSystem {
   }
 
   intersects(a, b) {
+    const e = this.overlapEpsilon;
     return (
-      a.min.x <= b.max.x && a.max.x >= b.min.x &&
-      a.min.y <= b.max.y && a.max.y >= b.min.y &&
-      a.min.z <= b.max.z && a.max.z >= b.min.z
+      a.min.x < b.max.x - e &&
+      a.max.x > b.min.x + e &&
+      a.min.y < b.max.y - e &&
+      a.max.y > b.min.y + e &&
+      a.min.z < b.max.z - e &&
+      a.max.z > b.min.z + e
     );
   }
 }
