@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { BOX_CONFIGS, MAX_BOXES } from './constants';
+import { MAX_BOXES } from './constants';
 
+// Draggable, minimizable control panel for adding/clearing boxes
 const ControlPanel = ({
   boxes,
   availableBoxes,
@@ -16,7 +17,11 @@ const ControlPanel = ({
   isBoxDragging,
   dragControllerRef,
   handleCameraView,
-  handleCSVUpload
+  handleCSVUpload,
+  onSuggestPlacement,
+  onSnapToSuggestion,
+  hasSuggestion,
+  isCalcSuggestion
 }) => {
   const [isPanelMinimized, setIsPanelMinimized] = useState(false);
   const [panelPosition, setPanelPosition] = useState({
@@ -84,6 +89,7 @@ const ControlPanel = ({
       }}
       onMouseDown={handleMouseDown}
     >
+      {/* Draggable Header */}
       <div
         className="panel-header"
         style={{
@@ -97,14 +103,7 @@ const ControlPanel = ({
           alignItems: 'center'
         }}
       >
-        <h3
-          style={{
-            margin: 0,
-            fontSize: '16px',
-            fontWeight: 600,
-            color: '#ffffff'
-          }}
-        >
+        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: '#ffffff' }}>
           Add Boxes
         </h3>
 
@@ -125,6 +124,7 @@ const ControlPanel = ({
         </button>
       </div>
 
+      {/* Panel Content */}
       {!isPanelMinimized && (
         <div style={{ padding: '24px' }}>
           
@@ -202,13 +202,7 @@ const ControlPanel = ({
                       flexShrink: 0
                     }}
                   />
-                  <div
-                    style={{
-                      fontSize: '14px',
-                      fontWeight: 600,
-                      color: '#1a1a1a'
-                    }}
-                  >
+                  <div style={{ fontSize: '14px', fontWeight: 600, color: '#1a1a1a' }}>
                     {config.label}
                   </div>
                 </div>
@@ -216,6 +210,7 @@ const ControlPanel = ({
             ))}
           </div>
 
+          {/* Add Box */}
           <button
             onClick={addBox}
             disabled={boxes.length >= MAX_BOXES}
@@ -231,6 +226,110 @@ const ControlPanel = ({
             Add Box
           </button>
 
+          {/* ── AI Best Fit ───────────────────────────────────────────────── */}
+          <div
+            style={{
+              marginBottom: '8px',
+              background: 'linear-gradient(135deg, #e8f8f2 0%, #d4f1e8 100%)',
+              border: '1.5px solid #1AA37A',
+              borderRadius: '10px',
+              padding: '14px'
+            }}
+          >
+            <div
+              style={{
+                fontSize: '11px',
+                fontWeight: 700,
+                letterSpacing: '0.6px',
+                color: '#1AA37A',
+                textTransform: 'uppercase',
+                marginBottom: '10px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+            >
+              <span>✦</span> AI Best Fit
+            </div>
+
+            {/* Suggest Placement */}
+            <button
+              onClick={onSuggestPlacement}
+              disabled={isCalcSuggestion}
+              style={{
+                ...btnBase,
+                marginBottom: '8px',
+                background: isCalcSuggestion
+                  ? '#a0d9c4'
+                  : 'linear-gradient(135deg, #1AA37A 0%, #13815f 100%)',
+                color: '#ffffff',
+                border: 'none',
+                cursor: isCalcSuggestion ? 'wait' : 'pointer',
+                opacity: isCalcSuggestion ? 0.8 : 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px'
+              }}
+            >
+              {isCalcSuggestion ? (
+                <>
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      width: '14px',
+                      height: '14px',
+                      border: '2px solid rgba(255,255,255,0.4)',
+                      borderTop: '2px solid #fff',
+                      borderRadius: '50%',
+                      animation: 'spin 0.7s linear infinite'
+                    }}
+                  />
+                  Calculating…
+                </>
+              ) : (
+                <>✦ Suggest Best Placement</>
+              )}
+            </button>
+
+            {/* Snap to Suggestion */}
+            <button
+              onClick={onSnapToSuggestion}
+              disabled={!hasSuggestion || boxes.length === 0}
+              style={{
+                ...btnBase,
+                marginBottom: 0,
+                background: hasSuggestion && boxes.length > 0 ? '#ffffff' : '#f5f5f5',
+                color: hasSuggestion && boxes.length > 0 ? '#1AA37A' : '#aaa',
+                border: `2px solid ${
+                  hasSuggestion && boxes.length > 0 ? '#1AA37A' : '#e0e0e0'
+                }`,
+                cursor: hasSuggestion && boxes.length > 0 ? 'pointer' : 'not-allowed',
+                animation:
+                  hasSuggestion && boxes.length > 0
+                    ? 'pulse-suggest 1.8s ease-in-out infinite'
+                    : 'none'
+              }}
+            >
+              ⬇ Snap Last Box to Suggestion
+            </button>
+
+            <div
+              style={{
+                marginTop: '8px',
+                fontSize: '11px',
+                color: hasSuggestion ? '#1AA37A' : '#999',
+                textAlign: 'center',
+                fontStyle: 'italic'
+              }}
+            >
+              {hasSuggestion
+                ? '● Ghost preview visible in truck'
+                : 'Click "Suggest" to find the tightest fit'}
+            </div>
+          </div>
+
+          {/* Clear All */}
           <button
             onClick={clearBoxes}
             disabled={boxes.length === 0}
@@ -246,6 +345,7 @@ const ControlPanel = ({
             Clear All Boxes
           </button>
 
+          {/* Export Load Plan */}
           <button
             onClick={exportLoadPlan}
             disabled={boxes.length === 0}
@@ -261,6 +361,7 @@ const ControlPanel = ({
             Export Load Plan
           </button>
 
+          {/* Undo / Redo */}
           <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
             <button
               onClick={undo}
@@ -306,6 +407,7 @@ const ControlPanel = ({
             </button>
           </div>
 
+          {/* Rotate Box */}
           <button
             onClick={() => dragControllerRef.current?.rotateSelected()}
             disabled={!isBoxDragging}
@@ -321,6 +423,7 @@ const ControlPanel = ({
             ↻ Rotate Box 90° (R)
           </button>
 
+          {/* Camera Views */}
           <div style={{ marginBottom: '8px' }}>
             <h4
               style={{
@@ -358,6 +461,7 @@ const ControlPanel = ({
               ))}
             </div>
           </div>
+
         </div>
       )}
     </div>

@@ -55,4 +55,8 @@ const ControlsGuide = () => {
   );
 };
 
+<<<<<<< HEAD
 export default ControlsGuide;
+=======
+export default ControlsGuide;
+>>>>>>> origin/Rhea

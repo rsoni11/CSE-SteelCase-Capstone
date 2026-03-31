@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 
@@ -10,33 +10,43 @@ import {
 } from './constants';
 import { initScene } from './TruckScene';
 import { useHistory } from './useHistory';
+import { FitSuggestionSystem } from './FitSuggestionSystem';
+import { GhostPreview } from './GhostPreview';
 import Header from './Header';
 import ControlPanel from './ControlPanel';
 import ControlsGuide from './ControlsGuide';
 
 const TruckLoadingPrototype = () => {
-  const mountRef = useRef(null);
-  const sceneRef = useRef(null);
-  const cameraRef = useRef(null);
-  const rendererRef = useRef(null);
+  // ── Refs ───────────────────────────────────────────────────────────────────
+  const mountRef          = useRef(null);
+  const sceneRef          = useRef(null);
+  const cameraRef         = useRef(null);
+  const rendererRef       = useRef(null);
   const dragControllerRef = useRef(null);
-  const cargoRegistryRef = useRef([]);
-  const saveToHistoryRef = useRef(null);
+  const cargoRegistryRef  = useRef([]);
+  const saveToHistoryRef  = useRef(null);
   const physicsEnabledRef = useRef(true);
-  const physicsApiRef = useRef(null);
+  const physicsApiRef     = useRef(null);
+  const ghostPreviewRef   = useRef(null);
+  const fitSystemRef      = useRef(null);
 
-  const [boxes, setBoxes] = useState([]);
-  const [availableBoxes, setAvailableBoxes] = useState(BOX_CONFIGS);
-  const [selectedBoxType, setSelectedBoxType] = useState(BOX_CONFIGS[0]);
-  const [stats, setStats] = useState({ fps: 60, boxCount: 0 });
-  const [isLoading, setIsLoading] = useState(true);
-  const [isBoxDragging, setIsBoxDragging] = useState(false);
+  // ── State ──────────────────────────────────────────────────────────────────
+  const [boxes, setBoxes]                       = useState([]);
+  const [availableBoxes, setAvailableBoxes]     = useState(BOX_CONFIGS);
+  const [selectedBoxType, setSelectedBoxType]   = useState(BOX_CONFIGS[0]);
+  const [stats, setStats]                       = useState({ fps: 60, boxCount: 0 });
+  const [isLoading, setIsLoading]               = useState(true);
+  const [isBoxDragging, setIsBoxDragging]       = useState(false);
+  const [suggestion, setSuggestion]             = useState(null);
+  const [isCalcSuggestion, setIsCalcSuggestion] = useState(false);
 
+  // ── History (undo/redo) ────────────────────────────────────────────────────
   const { history, historyIndex, saveToHistory, undo, redo, clearHistory } =
     useHistory(cargoRegistryRef, rendererRef, sceneRef, cameraRef);
 
   saveToHistoryRef.current = saveToHistory;
 
+  // ── Space utilization ──────────────────────────────────────────────────────
   const usedVolume = boxes.reduce((total, box) => {
     const pos = box.mesh.position;
     const isInsideTruck =
@@ -57,12 +67,13 @@ const TruckLoadingPrototype = () => {
 
   const volumePercentage = ((usedVolume / TRUCK_VOLUME) * 100).toFixed(2);
 
+  // ── Scene init ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!mountRef.current) return;
 
     const { scene, camera, renderer, dragController, cleanup } = initScene({
-      mountEl: mountRef.current,
-      cargoRegistry: cargoRegistryRef.current,
+      mountEl:          mountRef.current,
+      cargoRegistry:    cargoRegistryRef.current,
       physicsEnabledRef,
       physicsApiRef,
       setStats,
@@ -71,17 +82,32 @@ const TruckLoadingPrototype = () => {
       saveToHistoryRef
     });
 
-    sceneRef.current = scene;
-    cameraRef.current = camera;
-    rendererRef.current = renderer;
+    sceneRef.current          = scene;
+    cameraRef.current         = camera;
+    rendererRef.current       = renderer;
     dragControllerRef.current = dragController;
 
-    return cleanup;
+    ghostPreviewRef.current = new GhostPreview(scene);
+    fitSystemRef.current    = new FitSuggestionSystem(cargoRegistryRef.current);
+
+    return () => {
+      ghostPreviewRef.current?.hide();
+      cleanup();
+    };
   }, []);
 
+  // ── Hide ghost on box type change ─────────────────────────────────────────
+  useEffect(() => {
+    ghostPreviewRef.current?.hide();
+    setSuggestion(null);
+  }, [selectedBoxType]);
+
+  // ── Camera View ────────────────────────────────────────────────────────────
   const handleCameraView = (view) => {
     if (!cameraRef.current) return;
+
     const camera = cameraRef.current;
+
     switch (view) {
       case 'top':
         camera.position.set(0, 80, 0.1);
@@ -99,6 +125,7 @@ const TruckLoadingPrototype = () => {
     }
   };
 
+  // ── Create Physics Body ────────────────────────────────────────────────────
   const createBoxBody = (boxType, boxMesh) => {
     const physicsApi = physicsApiRef.current;
     if (!physicsApi?.world) return null;
@@ -109,7 +136,7 @@ const TruckLoadingPrototype = () => {
     );
 
     const bodyMaterial = new CANNON.Material(`box-${boxType.id}-${Date.now()}`);
-    const friction = boxType.physics?.friction ?? 0.9;
+    const friction    = boxType.physics?.friction ?? 0.9;
     const restitution = boxType.physics?.restitution ?? 0.0;
 
     if (physicsApi.materials?.defaultMaterial) {
@@ -133,19 +160,15 @@ const TruckLoadingPrototype = () => {
     }
 
     const body = new CANNON.Body({
-      mass: boxType.physics?.mass ?? 20,
-      material: bodyMaterial,
+      mass:            boxType.physics?.mass ?? 20,
+      material:        bodyMaterial,
       shape,
-      position: new CANNON.Vec3(
-        boxMesh.position.x,
-        boxMesh.position.y,
-        boxMesh.position.z
-      ),
-      angularDamping: 0.92,
-      linearDamping: 0.45,
-      allowSleep: true,
+      position:        new CANNON.Vec3(boxMesh.position.x, boxMesh.position.y, boxMesh.position.z),
+      angularDamping:  0.92,
+      linearDamping:   0.45,
+      allowSleep:      true,
       sleepSpeedLimit: 0.08,
-      sleepTimeLimit: 0.5
+      sleepTimeLimit:  0.5
     });
 
     body.quaternion.set(
@@ -175,7 +198,6 @@ const TruckLoadingPrototype = () => {
     reader.onload = (e) => {
       const text = e.target.result;
       
-      // Safely split lines whether it's Mac, Windows, or Excel format
       const lines = text.split(/\r?\n|\r/).map(l => l.trim()).filter(l => l);
       
       if (lines.length < 2) {
@@ -237,6 +259,7 @@ const TruckLoadingPrototype = () => {
     if(event.target.value) event.target.value = null; 
   };
 
+  // ── Add Box ────────────────────────────────────────────────────────────────
   const addBox = () => {
     if (!sceneRef.current) return;
 
@@ -252,7 +275,7 @@ const TruckLoadingPrototype = () => {
     );
 
     const boxMaterial = new THREE.MeshStandardMaterial({
-      color: selectedBoxType.color,
+      color:     selectedBoxType.color,
       roughness: 0.5,
       metalness: 0.1
     });
@@ -267,7 +290,7 @@ const TruckLoadingPrototype = () => {
       Math.floor(boxes.length / 5) * 0.2;
 
     box.position.set(spawnX, spawnY, spawnZ);
-    box.castShadow = true;
+    box.castShadow    = true;
     box.receiveShadow = true;
 
     box.add(
@@ -278,21 +301,22 @@ const TruckLoadingPrototype = () => {
     );
 
     sceneRef.current.add(box);
+
     const body = createBoxBody(selectedBoxType, box);
 
     const entry = {
-      id: `${selectedBoxType.id}-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-      type: selectedBoxType.id,
-      label: selectedBoxType.label,
-      mesh: box,
+      id:           `${selectedBoxType.id}-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      type:         selectedBoxType.id,
+      label:        selectedBoxType.label,
+      mesh:         box,
       body,
       size: {
         x: selectedBoxType.dimensions.width,
         y: selectedBoxType.dimensions.height,
         z: selectedBoxType.dimensions.depth
       },
-      dimensions: { ...selectedBoxType.dimensions },
-      physics: { ...selectedBoxType.physics },
+      dimensions:   { ...selectedBoxType.dimensions },
+      physics:      { ...selectedBoxType.physics },
       baseMaterial: boxMaterial
     };
 
@@ -300,16 +324,16 @@ const TruckLoadingPrototype = () => {
 
     setBoxes((prev) => [
       ...prev,
-      {
-        id: entry.id,
-        mesh: box,
-        type: selectedBoxType.id
-      }
+      { id: entry.id, mesh: box, type: selectedBoxType.id }
     ]);
 
     setStats((prev) => ({ ...prev, boxCount: prev.boxCount + 1 }));
+
+    ghostPreviewRef.current?.hide();
+    setSuggestion(null);
   };
 
+  // ── Export Load Plan ───────────────────────────────────────────────────────
   const exportLoadPlan = () => {
     const boxesPayload = cargoRegistryRef.current.map((entry, index) => {
       const volume =
@@ -319,13 +343,13 @@ const TruckLoadingPrototype = () => {
 
       return {
         index: index + 1,
-        id: entry.id,
-        type: entry.type,
+        id:    entry.id,
+        type:  entry.type,
         label: entry.label,
         dimensions: {
-          width: Number(entry.dimensions.width.toFixed(3)),
+          width:  Number(entry.dimensions.width.toFixed(3)),
           height: Number(entry.dimensions.height.toFixed(3)),
-          depth: Number(entry.dimensions.depth.toFixed(3))
+          depth:  Number(entry.dimensions.depth.toFixed(3))
         },
         position: {
           x: Number(entry.mesh.position.x.toFixed(3)),
@@ -348,7 +372,7 @@ const TruckLoadingPrototype = () => {
         totalVolumeFt3: Number(TRUCK_VOLUME.toFixed(3))
       },
       summary: {
-        totalBoxes: boxesPayload.length,
+        totalBoxes:         boxesPayload.length,
         totalVolumeUsedFt3: Number(usedVolume.toFixed(3)),
         utilizationPercent: Number(volumePercentage)
       },
@@ -359,9 +383,9 @@ const TruckLoadingPrototype = () => {
       type: 'application/json'
     });
 
-    const url = URL.createObjectURL(blob);
+    const url  = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = url;
+    link.href     = url;
     link.download = 'load-plan.json';
     document.body.appendChild(link);
     link.click();
@@ -369,6 +393,7 @@ const TruckLoadingPrototype = () => {
     URL.revokeObjectURL(url);
   };
 
+  // ── Clear Boxes ────────────────────────────────────────────────────────────
   const clearBoxes = () => {
     const physicsWorld = physicsApiRef.current?.world;
 
@@ -396,11 +421,73 @@ const TruckLoadingPrototype = () => {
 
     cargoRegistryRef.current.length = 0;
     dragControllerRef.current?.clearRegistry();
+    ghostPreviewRef.current?.hide();
+    setSuggestion(null);
     setBoxes([]);
     setStats((prev) => ({ ...prev, boxCount: 0 }));
     clearHistory();
   };
 
+  // ── Suggest Placement ─────────────────────────────────────────────────────
+  const handleSuggestPlacement = useCallback(() => {
+    if (!fitSystemRef.current || !ghostPreviewRef.current || !sceneRef.current) return;
+
+    setIsCalcSuggestion(true);
+    ghostPreviewRef.current.hide();
+    setSuggestion(null);
+
+    setTimeout(() => {
+      const size = {
+        x: selectedBoxType.dimensions.width,
+        y: selectedBoxType.dimensions.height,
+        z: selectedBoxType.dimensions.depth
+      };
+
+      const pos = fitSystemRef.current.findBestFit(size);
+
+      if (pos) {
+        ghostPreviewRef.current.show(pos, size, selectedBoxType.color);
+        setSuggestion({ position: pos, size });
+      } else {
+        setSuggestion(null);
+        alert('No valid placement found — the truck may be full!');
+      }
+
+      setIsCalcSuggestion(false);
+    }, 30);
+  }, [selectedBoxType]);
+
+  // ── Snap to Suggestion ────────────────────────────────────────────────────
+  const handleSnapToSuggestion = useCallback(() => {
+    if (!suggestion || boxes.length === 0) return;
+
+    const lastEntry = cargoRegistryRef.current[cargoRegistryRef.current.length - 1];
+    if (!lastEntry) return;
+
+    const oldPos = lastEntry.mesh.position.clone();
+    lastEntry.mesh.position.copy(suggestion.position);
+    lastEntry.size.x = suggestion.size.x;
+    lastEntry.size.y = suggestion.size.y;
+    lastEntry.size.z = suggestion.size.z;
+
+    if (lastEntry.body) {
+      lastEntry.body.position.set(
+        suggestion.position.x,
+        suggestion.position.y,
+        suggestion.position.z
+      );
+      lastEntry.body.velocity.set(0, 0, 0);
+      lastEntry.body.angularVelocity.set(0, 0, 0);
+      lastEntry.body.wakeUp();
+    }
+
+    saveToHistoryRef.current?.(lastEntry.mesh, oldPos, suggestion.position);
+
+    ghostPreviewRef.current?.hide();
+    setSuggestion(null);
+  }, [suggestion, boxes.length]);
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div
       style={{
@@ -424,6 +511,7 @@ const TruckLoadingPrototype = () => {
         redo={redo}
       />
 
+      {/* 3D Canvas */}
       <div
         ref={mountRef}
         style={{
@@ -485,14 +573,22 @@ const TruckLoadingPrototype = () => {
         dragControllerRef={dragControllerRef}
         handleCameraView={handleCameraView}
         handleCSVUpload={handleCSVUpload}
+        onSuggestPlacement={handleSuggestPlacement}
+        onSnapToSuggestion={handleSnapToSuggestion}
+        hasSuggestion={!!suggestion}
+        isCalcSuggestion={isCalcSuggestion}
       />
 
       <ControlsGuide />
 
       <style>{`
         @keyframes spin {
-          0% { transform: rotate(0deg); }
+          0%   { transform: rotate(0deg); }
           100% { transform: rotate(360deg); }
+        }
+        @keyframes pulse-suggest {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(26,163,122,0.5); }
+          50%       { box-shadow: 0 0 0 6px rgba(26,163,122,0); }
         }
       `}</style>
     </div>
