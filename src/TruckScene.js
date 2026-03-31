@@ -28,7 +28,7 @@ export function initScene({
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(mountEl.clientWidth, mountEl.clientHeight);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(window.devicePixelRatio);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   mountEl.appendChild(renderer.domElement);
@@ -446,7 +446,6 @@ export function initScene({
     camera.aspect = mountEl.clientWidth / mountEl.clientHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(mountEl.clientWidth, mountEl.clientHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   };
 
   window.addEventListener('resize', handleResize);

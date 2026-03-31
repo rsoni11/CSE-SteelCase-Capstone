@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 
@@ -31,39 +31,27 @@ const TruckLoadingPrototype = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isBoxDragging, setIsBoxDragging] = useState(false);
 
-  const boxConfigById = useMemo(() => {
-    const map = new Map();
-    for (const cfg of BOX_CONFIGS) map.set(cfg.id, cfg);
-    return map;
-  }, []);
-
   const { history, historyIndex, saveToHistory, undo, redo, clearHistory } =
     useHistory(cargoRegistryRef, rendererRef, sceneRef, cameraRef);
 
   saveToHistoryRef.current = saveToHistory;
 
-  const usedVolume = useMemo(() => {
-    const halfL = TRUCK_DIMENSIONS.length / 2;
-    const halfW = TRUCK_DIMENSIONS.width / 2;
+  const usedVolume = boxes.reduce((total, box) => {
+    const pos = box.mesh.position;
+    const isInsideTruck =
+      pos.x > -TRUCK_DIMENSIONS.length / 2 &&
+      pos.x < TRUCK_DIMENSIONS.length / 2 &&
+      pos.z > -TRUCK_DIMENSIONS.width / 2 &&
+      pos.z < TRUCK_DIMENSIONS.width / 2;
 
-    let total = 0;
-    for (const box of boxes) {
-      const pos = box.mesh.position;
-      const isInsideTruck =
-        pos.x > -halfL &&
-        pos.x < halfL &&
-        pos.z > -halfW &&
-        pos.z < halfW;
+    if (!isInsideTruck) return total;
 
-      if (!isInsideTruck) continue;
-      const config = boxConfigById.get(box.type);
-      if (!config) continue;
+    const config = BOX_CONFIGS.find((c) => c.id === box.type);
+    if (!config) return total;
 
-      const { width, height, depth } = config.dimensions;
-      total += width * height * depth;
-    }
-    return total;
-  }, [boxes, boxConfigById]);
+    const { width, height, depth } = config.dimensions;
+    return total + width * height * depth;
+  }, 0);
 
   const volumePercentage = ((usedVolume / TRUCK_VOLUME) * 100).toFixed(2);
 
@@ -120,47 +108,34 @@ const TruckLoadingPrototype = () => {
       new CANNON.Vec3(width / 2, height / 2, depth / 2)
     );
 
-    if (!physicsApi.boxMaterials) physicsApi.boxMaterials = {};
-    if (!physicsApi.contactPairs) physicsApi.contactPairs = {};
-
-    const bodyMaterial =
-      physicsApi.boxMaterials[boxType.id] ??
-      (physicsApi.boxMaterials[boxType.id] = new CANNON.Material(`box-${boxType.id}`));
+    const bodyMaterial = new CANNON.Material(`box-${boxType.id}-${Date.now()}`);
     const friction = boxType.physics?.friction ?? 0.9;
     const restitution = boxType.physics?.restitution ?? 0.0;
 
     if (physicsApi.materials?.defaultMaterial) {
-      const key = `box:${boxType.id}|default`;
-      if (!physicsApi.contactPairs[key]) {
-        physicsApi.contactPairs[key] = true;
-        physicsApi.world.addContactMaterial(
-          new CANNON.ContactMaterial(
-            bodyMaterial,
-            physicsApi.materials.defaultMaterial,
-            {
-              friction,
-              restitution
-            }
-          )
-        );
-      }
+      physicsApi.world.addContactMaterial(
+        new CANNON.ContactMaterial(
+          bodyMaterial,
+          physicsApi.materials.defaultMaterial,
+          {
+            friction,
+            restitution
+          }
+        )
+      );
     }
 
     if (physicsApi.materials?.wallMaterial) {
-      const key = `box:${boxType.id}|wall`;
-      if (!physicsApi.contactPairs[key]) {
-        physicsApi.contactPairs[key] = true;
-        physicsApi.world.addContactMaterial(
-          new CANNON.ContactMaterial(
-            bodyMaterial,
-            physicsApi.materials.wallMaterial,
-            {
-              friction: Math.max(friction, 0.95),
-              restitution
-            }
-          )
-        );
-      }
+      physicsApi.world.addContactMaterial(
+        new CANNON.ContactMaterial(
+          bodyMaterial,
+          physicsApi.materials.wallMaterial,
+          {
+            friction: Math.max(friction, 0.95),
+            restitution
+          }
+        )
+      );
     }
 
     const body = new CANNON.Body({
@@ -348,13 +323,11 @@ const TruckLoadingPrototype = () => {
 
       boxEntry.mesh.traverse((obj) => {
         if (obj.geometry) obj.geometry.dispose();
-        if (obj.material) {
-          const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
-          for (const m of materials) m?.dispose?.();
-        }
       });
 
-      // baseMaterial is disposed above via traverse on the mesh
+      if (registryEntry?.baseMaterial) {
+        registryEntry.baseMaterial.dispose();
+      }
     });
 
     cargoRegistryRef.current.length = 0;

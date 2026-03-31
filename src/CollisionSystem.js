@@ -5,41 +5,35 @@ export class CollisionSystem {
   constructor(cargoBoxes = []) {
     this.cargoBoxes = cargoBoxes;
     this.overlapEpsilon = 1e-4;
-    // Reused vectors to reduce allocations while dragging.
-    this._half = new THREE.Vector3();
-    this._aMin = new THREE.Vector3();
-    this._aMax = new THREE.Vector3();
-    this._bMin = new THREE.Vector3();
-    this._bMax = new THREE.Vector3();
   }
 
   wouldCollide(movingMesh, testPosition, size) {
+    const a = this.createAABB(size, testPosition);
     for (const other of this.cargoBoxes) {
       if (other.mesh === movingMesh) continue;
-      if (this.intersectsAABBs(size, testPosition, other.size, other.mesh.position)) {
-        return true;
-      }
+      const b = this.createAABB(other.size, other.mesh.position);
+      if (this.intersects(a, b)) return true;
     }
     return false;
   }
 
-  intersectsAABBs(sizeA, posA, sizeB, posB) {
+  createAABB(size, pos) {
+    const half = new THREE.Vector3(size.x / 2, size.y / 2, size.z / 2);
+    return {
+      min: pos.clone().sub(half),
+      max: pos.clone().add(half)
+    };
+  }
+
+  intersects(a, b) {
     const e = this.overlapEpsilon;
-    this._half.set(sizeA.x / 2, sizeA.y / 2, sizeA.z / 2);
-    this._aMin.copy(posA).sub(this._half);
-    this._aMax.copy(posA).add(this._half);
-
-    this._half.set(sizeB.x / 2, sizeB.y / 2, sizeB.z / 2);
-    this._bMin.copy(posB).sub(this._half);
-    this._bMax.copy(posB).add(this._half);
-
     return (
-      this._aMin.x < this._bMax.x - e &&
-      this._aMax.x > this._bMin.x + e &&
-      this._aMin.y < this._bMax.y - e &&
-      this._aMax.y > this._bMin.y + e &&
-      this._aMin.z < this._bMax.z - e &&
-      this._aMax.z > this._bMin.z + e
+      a.min.x < b.max.x - e &&
+      a.max.x > b.min.x + e &&
+      a.min.y < b.max.y - e &&
+      a.max.y > b.min.y + e &&
+      a.min.z < b.max.z - e &&
+      a.max.z > b.min.z + e
     );
   }
 }

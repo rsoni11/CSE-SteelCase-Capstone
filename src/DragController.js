@@ -31,7 +31,6 @@ export class DragController {
     this.manualYOffset = 0;
     this.lastWorldPoint = null;
     this.dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-    this._tmpVec3 = new THREE.Vector3();
 
     this.highlightMaterial = new THREE.MeshStandardMaterial({
       color: 0xffffff,
@@ -232,7 +231,7 @@ export class DragController {
   adjustHeight(delta) {
     if (!this.dragging || !this.selectedEntry) return;
 
-    const pos = this._tmpVec3.copy(this.selectedEntry.mesh.position);
+    const pos = this.selectedEntry.mesh.position.clone();
     const baseY = this.computeBaseStackY(pos.x, pos.z);
     const nextY = this.clampY(this.currentY + delta);
     this.manualYOffset = nextY - baseY;
@@ -261,15 +260,9 @@ export class DragController {
 
     const mesh = this.selectedEntry.mesh;
     const original = mesh.quaternion.clone();
-    const originalSizeX = this.selectedEntry.size.x;
-    const originalSizeZ = this.selectedEntry.size.z;
     mesh.rotation.y += Math.PI / 2;
 
-    // Rotation changes the box footprint for AABB collision/stacking.
-    this.selectedEntry.size.x = originalSizeZ;
-    this.selectedEntry.size.z = originalSizeX;
-
-    const pos = this._tmpVec3.copy(mesh.position);
+    const pos = mesh.position.clone();
     const collides = this.collisionSystem.wouldCollide(
       mesh,
       pos,
@@ -278,8 +271,6 @@ export class DragController {
 
     if (collides) {
       mesh.quaternion.copy(original);
-      this.selectedEntry.size.x = originalSizeX;
-      this.selectedEntry.size.z = originalSizeZ;
       mesh.material = this.collisionMaterial;
       return;
     }
