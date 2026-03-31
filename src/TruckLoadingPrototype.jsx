@@ -26,6 +26,7 @@ const TruckLoadingPrototype = () => {
   const physicsApiRef = useRef(null);
 
   const [boxes, setBoxes] = useState([]);
+  const [availableBoxes, setAvailableBoxes] = useState(BOX_CONFIGS);
   const [selectedBoxType, setSelectedBoxType] = useState(BOX_CONFIGS[0]);
   const [stats, setStats] = useState({ fps: 60, boxCount: 0 });
   const [isLoading, setIsLoading] = useState(true);
@@ -46,7 +47,8 @@ const TruckLoadingPrototype = () => {
 
     if (!isInsideTruck) return total;
 
-    const config = BOX_CONFIGS.find((c) => c.id === box.type);
+    // Use availableBoxes instead of just BOX_CONFIGS so uploaded items count!
+    const config = availableBoxes.find((c) => c.id === box.type) || BOX_CONFIGS.find((c) => c.id === box.type);
     if (!config) return total;
 
     const { width, height, depth } = config.dimensions;
@@ -79,9 +81,7 @@ const TruckLoadingPrototype = () => {
 
   const handleCameraView = (view) => {
     if (!cameraRef.current) return;
-
     const camera = cameraRef.current;
-
     switch (view) {
       case 'top':
         camera.position.set(0, 80, 0.1);
@@ -117,10 +117,7 @@ const TruckLoadingPrototype = () => {
         new CANNON.ContactMaterial(
           bodyMaterial,
           physicsApi.materials.defaultMaterial,
-          {
-            friction,
-            restitution
-          }
+          { friction, restitution }
         )
       );
     }
@@ -130,10 +127,7 @@ const TruckLoadingPrototype = () => {
         new CANNON.ContactMaterial(
           bodyMaterial,
           physicsApi.materials.wallMaterial,
-          {
-            friction: Math.max(friction, 0.95),
-            restitution
-          }
+          { friction: Math.max(friction, 0.95), restitution }
         )
       );
     }
@@ -171,6 +165,78 @@ const TruckLoadingPrototype = () => {
     return body;
   };
 
+  // ── Drag & Drop CSV Upload Handler ─────────────────────────────────────────
+  const handleCSVUpload = (event) => {
+    event?.preventDefault(); 
+    const file = event.dataTransfer ? event.dataTransfer.files[0] : event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target.result;
+      
+      // Safely split lines whether it's Mac, Windows, or Excel format
+      const lines = text.split(/\r?\n|\r/).map(l => l.trim()).filter(l => l);
+      
+      if (lines.length < 2) {
+        alert("This CSV file is empty! Please upload a file with actual box data.");
+        return;
+      }
+
+      const headers = lines[0].split(',').map(h => h.trim());
+      const lenIdx = headers.indexOf('Length');
+      const widIdx = headers.indexOf('Width');
+      const hgtIdx = headers.indexOf('Height');
+      const descIdx = headers.indexOf('Parcel Descript');
+      const qtyIdx = headers.indexOf('# Pieces');
+
+      if (lenIdx === -1 || widIdx === -1 || hgtIdx === -1) {
+        alert('Error: This CSV is missing the Length, Width, or Height columns.');
+        return;
+      }
+
+      const parsedBoxes = [];
+      const colors = ['#FF6B35', '#004E89', '#1AA37A', '#9B59B6', '#E74C3C', '#F39C12', '#2C3E50'];
+
+      for (let i = 1; i < lines.length; i++) {
+        try {
+          const cols = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+          if (cols.length < Math.max(lenIdx, widIdx, hgtIdx)) continue;
+
+          const l = parseFloat(cols[lenIdx]) || 0;
+          const w = parseFloat(cols[widIdx]) || 0;
+          const h = parseFloat(cols[hgtIdx]) || 0;
+          
+          if (l === 0 && w === 0 && h === 0) continue; 
+
+          const qty = qtyIdx !== -1 ? parseInt(cols[qtyIdx]) || 1 : 1;
+          const desc = descIdx !== -1 ? cols[descIdx].replace(/"/g, '') : `Custom Box ${i}`;
+
+          parsedBoxes.push({
+            id: `csv_box_${i}_${Date.now()}`,
+            dimensions: { width: l / 12, height: h / 12, depth: w / 12 }, 
+            color: colors[i % colors.length],
+            label: `${desc} (${l}″×${w}″×${h}″) - Qty: ${qty}`,
+            availableQty: qty,
+            physics: { mass: 20, friction: 0.9, restitution: 0.0 }
+          });
+        } catch (err) {
+          console.warn(`Skipped malformed row ${i}:`, lines[i]);
+        }
+      }
+
+      if (parsedBoxes.length > 0) {
+        setAvailableBoxes(parsedBoxes);
+        setSelectedBoxType(parsedBoxes[0]);
+      } else {
+        alert("No valid box dimensions found in this CSV. All rows were 0x0x0.");
+      }
+    };
+    
+    reader.readAsText(file);
+    if(event.target.value) event.target.value = null; 
+  };
+
   const addBox = () => {
     if (!sceneRef.current) return;
 
@@ -201,7 +267,6 @@ const TruckLoadingPrototype = () => {
       Math.floor(boxes.length / 5) * 0.2;
 
     box.position.set(spawnX, spawnY, spawnZ);
-
     box.castShadow = true;
     box.receiveShadow = true;
 
@@ -213,7 +278,6 @@ const TruckLoadingPrototype = () => {
     );
 
     sceneRef.current.add(box);
-
     const body = createBoxBody(selectedBoxType, box);
 
     const entry = {
@@ -407,6 +471,7 @@ const TruckLoadingPrototype = () => {
 
       <ControlPanel
         boxes={boxes}
+        availableBoxes={availableBoxes}
         selectedBoxType={selectedBoxType}
         setSelectedBoxType={setSelectedBoxType}
         addBox={addBox}
@@ -419,6 +484,7 @@ const TruckLoadingPrototype = () => {
         isBoxDragging={isBoxDragging}
         dragControllerRef={dragControllerRef}
         handleCameraView={handleCameraView}
+        handleCSVUpload={handleCSVUpload}
       />
 
       <ControlsGuide />

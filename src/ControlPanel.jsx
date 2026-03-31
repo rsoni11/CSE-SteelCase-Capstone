@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { BOX_CONFIGS, MAX_BOXES } from './constants';
 
-// Draggable, minimizable control panel for adding/clearing boxes
 const ControlPanel = ({
   boxes,
+  availableBoxes,
   selectedBoxType,
   setSelectedBoxType,
   addBox,
@@ -15,7 +15,8 @@ const ControlPanel = ({
   redo,
   isBoxDragging,
   dragControllerRef,
-  handleCameraView
+  handleCameraView,
+  handleCSVUpload
 }) => {
   const [isPanelMinimized, setIsPanelMinimized] = useState(false);
   const [panelPosition, setPanelPosition] = useState({
@@ -126,8 +127,51 @@ const ControlPanel = ({
 
       {!isPanelMinimized && (
         <div style={{ padding: '24px' }}>
-          <div style={{ marginBottom: '20px' }}>
-            {BOX_CONFIGS.map((config) => (
+          
+          {/* Drag & Drop CSV File Upload */}
+          <div style={{ marginBottom: '16px' }}>
+            <label 
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.currentTarget.style.borderColor = '#1AA37A';
+                e.currentTarget.style.background = '#e8f6f3';
+              }}
+              onDragLeave={(e) => {
+                e.preventDefault();
+                e.currentTarget.style.borderColor = '#ced4da';
+                e.currentTarget.style.background = '#f8f9fa';
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.currentTarget.style.borderColor = '#ced4da';
+                e.currentTarget.style.background = '#f8f9fa';
+                handleCSVUpload(e);
+              }}
+              style={{
+                display: 'block', width: '100%', padding: '20px 10px', 
+                background: '#f8f9fa', color: '#495057', 
+                border: '2px dashed #ced4da', borderRadius: '8px',
+                fontSize: '13px', fontWeight: 600, cursor: 'pointer', 
+                textAlign: 'center', transition: 'all 0.2s ease', 
+                boxSizing: 'border-box'
+              }}
+            >
+              <input 
+                type="file" 
+                accept=".csv" 
+                onChange={handleCSVUpload} 
+                style={{ display: 'none' }} 
+              />
+              <div style={{ fontSize: '18px', marginBottom: '4px' }}>📥</div>
+              Drag & Drop your Steelcase CSV here
+              <br/>
+              <span style={{ fontSize: '11px', color: '#888', fontWeight: 400 }}>or click to browse</span>
+            </label>
+          </div>
+
+          {/* Box Type Selector */}
+          <div style={{ marginBottom: '20px', maxHeight: '250px', overflowY: 'auto' }}>
+            {availableBoxes.map((config) => (
               <div
                 key={config.id}
                 onClick={() => setSelectedBoxType(config)}
