@@ -21,7 +21,9 @@ const ControlPanel = ({
   onSuggestPlacement,
   onSnapToSuggestion,
   hasSuggestion,
-  isCalcSuggestion
+  isCalcSuggestion,
+  activeStopFilter,
+  setActiveStopFilter
 }) => {
   const [isPanelMinimized, setIsPanelMinimized] = useState(false);
   const [panelPosition, setPanelPosition] = useState({
@@ -169,62 +171,115 @@ const ControlPanel = ({
             </label>
           </div>
 
-          {/* Box Type Selector */}
-          <div style={{ marginBottom: '20px', maxHeight: '250px', overflowY: 'auto' }}>
-            {availableBoxes.map((config) => (
-              <div
-                key={config.id}
-                onClick={() => setSelectedBoxType(config)}
-                style={{
-                  padding: '12px 16px',
-                  marginBottom: '8px',
-                  border: `2px solid ${
-                    selectedBoxType.id === config.id ? config.color : '#e0e0e0'
-                  }`,
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                  transition: 'all 0.2s ease',
-                  background:
-                    selectedBoxType.id === config.id
-                      ? `${config.color}10`
-                      : '#ffffff',
-                  transform:
-                    selectedBoxType.id === config.id ? 'scale(1.02)' : 'scale(1)'
+{/* Active Filter Banner OR Empty State Prompt */}
+          {activeStopFilter ? (
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '10px 12px', marginBottom: '16px', background: '#eef2f5',
+              borderLeft: '4px solid #1AA37A', borderRadius: '6px', 
+              fontSize: '12px', fontWeight: 600, color: '#004E89'
+            }}>
+              <span>Currently Loading: Stop {activeStopFilter}</span>
+              <button
+                onClick={() => setActiveStopFilter(null)}
+                style={{ 
+                  background: '#ffffff', border: '1px solid #ced4da', color: '#666', 
+                  borderRadius: '4px', cursor: 'pointer', fontSize: '11px', padding: '4px 8px' 
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                Clear
+              </button>
+            </div>
+          ) : (
+            <div style={{
+              padding: '16px 14px', marginBottom: '16px', background: '#f8f9fa',
+              border: '1px dashed #ced4da', borderRadius: '8px', 
+              fontSize: '13px', color: '#666', textAlign: 'center', lineHeight: '1.5'
+            }}>
+              Select a Stop from the <strong>Shipment Summary</strong> panel ↗ <br/>to view and load packages.
+            </div>
+          )}
+
+{/* Box Type Selector (Only visible if a stop is active) */}
+          {activeStopFilter && availableBoxes.length > 0 && (
+            <div style={{ marginBottom: '20px', maxHeight: '250px', overflowY: 'auto' }}>
+              {availableBoxes.map((config) => {
+                // Calculate remaining quantity dynamically
+                const loadedCount = boxes.filter(b => b.type === config.id).length;
+                const remainingQty = config.availableQty - loadedCount;
+                const isDepleted = remainingQty <= 0;
+                const isSelected = selectedBoxType?.id === config.id;
+
+                return (
                   <div
-                    style={{
-                      width: '24px',
-                      height: '24px',
-                      background: config.color,
-                      borderRadius: '4px',
-                      flexShrink: 0
+                    key={config.id}
+                    onClick={() => {
+                      if (!isDepleted) setSelectedBoxType(config);
                     }}
-                  />
-                  <div style={{ fontSize: '14px', fontWeight: 600, color: '#1a1a1a' }}>
-                    {config.label}
+                    style={{
+                      padding: '12px 16px',
+                      marginBottom: '8px',
+                      border: `2px solid ${isSelected ? config.color : '#e0e0e0'}`,
+                      borderRadius: '8px',
+                      cursor: isDepleted ? 'not-allowed' : 'pointer',
+                      transition: 'all 0.2s ease',
+                      background: isSelected ? `${config.color}10` : '#ffffff',
+                      opacity: isDepleted ? 0.6 : 1,
+                      transform: isSelected && !isDepleted ? 'scale(1.02)' : 'scale(1)'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{ width: '20px', height: '20px', background: config.color, borderRadius: '4px', flexShrink: 0 }} />
+                        <div style={{ fontSize: '13px', fontWeight: 600, color: '#1a1a1a' }}>
+                          {config.label}
+                        </div>
+                      </div>
+                      
+                      {/* Quantity Indicator */}
+                      <div style={{
+                        fontSize: '11px', fontWeight: 700,
+                        background: isDepleted ? '#f1f3f5' : '#e8f6f3',
+                        color: isDepleted ? '#adb5bd' : '#1AA37A',
+                        padding: '4px 8px', borderRadius: '12px'
+                      }}>
+                        {remainingQty} left
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
-            ))}
-          </div>
+                );
+              })}
+            </div>
+          )}
 
           {/* Add Box */}
-          <button
-            onClick={addBox}
-            disabled={boxes.length >= MAX_BOXES}
-            style={{
-              ...btnBase,
-              background: selectedBoxType.color,
-              color: '#ffffff',
-              border: 'none',
-              cursor: boxes.length >= MAX_BOXES ? 'not-allowed' : 'pointer',
-              opacity: boxes.length >= MAX_BOXES ? 0.5 : 1
-            }}
-          >
-            Add Box
-          </button>
+          {(() => {
+            // Check if the currently selected box can still be added
+            const selectedLoadedCount = selectedBoxType ? boxes.filter(b => b.type === selectedBoxType.id).length : 0;
+            const selectedRemaining = selectedBoxType ? (selectedBoxType.availableQty - selectedLoadedCount) : 0;
+            const canAdd = selectedBoxType && selectedRemaining > 0 && boxes.length < MAX_BOXES;
+
+            return (
+              <button
+                onClick={addBox}
+                disabled={!canAdd}
+                style={{
+                  ...btnBase,
+                  background: selectedBoxType && canAdd ? selectedBoxType.color : '#e0e0e0',
+                  color: selectedBoxType && canAdd ? '#ffffff' : '#999',
+                  border: 'none',
+                  cursor: canAdd ? 'pointer' : 'not-allowed',
+                  opacity: canAdd ? 1 : 0.5
+                }}
+              >
+                {boxes.length >= MAX_BOXES 
+                  ? 'Truck Full (Limit Reached)' 
+                  : (selectedRemaining <= 0 && selectedBoxType 
+                      ? 'Quantity Depleted' 
+                      : 'Add Box')}
+              </button>
+            );
+          })()}
 
           {/* ── AI Best Fit ───────────────────────────────────────────────── */}
           <div
