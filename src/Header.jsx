@@ -2,7 +2,18 @@ import React from 'react';
 import { TRUCK_VOLUME } from './constants';
 
 // Top header bar with title, stats, and undo/redo buttons
-const Header = ({ stats, usedVolume, volumePercentage, isBoxDragging, historyIndex, history, undo, redo }) => {
+const Header = ({
+  stats,
+  usedVolume,
+  volumePercentage,
+  isBoxDragging,
+  historyIndex,
+  history,
+  undo,
+  redo,
+  selectedExampleName,
+  stressResult
+}) => {
   return (
     <div style={{
       position: 'absolute', top: 0, left: 0, right: 0,
@@ -19,6 +30,9 @@ const Header = ({ stats, usedVolume, volumePercentage, isBoxDragging, historyInd
         </h1>
         <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#666', fontWeight: 400 }}>
           53' × 8.5' × 9' Standard Trailer
+        </p>
+        <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#004E89', fontWeight: 600 }}>
+          Example: {selectedExampleName}
         </p>
       </div>
 
@@ -67,6 +81,13 @@ const Header = ({ stats, usedVolume, volumePercentage, isBoxDragging, historyInd
 
         {isBoxDragging && (
           <div><strong style={{ color: '#9B59B6' }}>● Dragging</strong></div>
+        )}
+        {stressResult && (
+          <div>
+            <strong style={{ color: stressResult.passed ? '#1AA37A' : '#FF6B35' }}>
+              Stress Avg {stressResult.avgFps} FPS
+            </strong>
+          </div>
         )}
       </div>
     </div>

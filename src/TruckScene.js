@@ -28,7 +28,7 @@ export function initScene({
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(mountEl.clientWidth, mountEl.clientHeight);
-  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   mountEl.appendChild(renderer.domElement);
@@ -46,8 +46,8 @@ export function initScene({
   const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9);
   directionalLight.position.set(20, 30, 20);
   directionalLight.castShadow = true;
-  directionalLight.shadow.mapSize.width = 2048;
-  directionalLight.shadow.mapSize.height = 2048;
+  directionalLight.shadow.mapSize.width = 1024;
+  directionalLight.shadow.mapSize.height = 1024;
   directionalLight.shadow.camera.near = 0.5;
   directionalLight.shadow.camera.far = 140;
   directionalLight.shadow.camera.left = -40;
@@ -296,6 +296,16 @@ export function initScene({
   bayFloor.position.set(-40, 0.01, 0);
   bayFloor.receiveShadow = true;
   bayGroup.add(bayFloor);
+
+  // Physics floor for staging / bay (matches PlaneGeometry 20×15 at y≈0, centered at x=-40).
+  // Without this, boxes spawned in the bay fall through — only the truck bed had collision.
+  const bayFloorBody = new CANNON.Body({
+    mass: 0,
+    material: wallMaterial,
+    shape: new CANNON.Box(new CANNON.Vec3(10, 0.08, 7.5)),
+    position: new CANNON.Vec3(-40, 0.08, 0)
+  });
+  world.addBody(bayFloorBody);
 
   const bayBorderPoints = [
     new THREE.Vector3(-50, 0.02, -7.5),
