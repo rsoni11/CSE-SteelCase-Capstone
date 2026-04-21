@@ -228,7 +228,7 @@ const TruckLoadingPrototype = () => {
   useEffect(() => {
     if (STEELCASE_LOAD_EXAMPLES.length > 0 && !selectedExampleId)
       handleLoadExampleSelect(STEELCASE_LOAD_EXAMPLES[0].id);
-  }, [selectedExampleId]);
+  }, []);
 
   useEffect(() => { ghostPreviewRef.current?.hide(); setSuggestion(null); }, [selectedBoxType]);
 
