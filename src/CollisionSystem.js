@@ -17,6 +17,19 @@ export class CollisionSystem {
     return false;
   }
 
+  // ── US6 Rhea: collision check that ignores a whole set of meshes ───────────
+  // Used during group movement so grouped boxes don't collide with each other.
+  wouldCollideExcluding(movingMesh, testPosition, size, excludeMeshes = []) {
+    const a = this.createAABB(size, testPosition);
+    for (const other of this.cargoBoxes) {
+      if (other.mesh === movingMesh) continue;
+      if (excludeMeshes.includes(other.mesh)) continue;
+      const b = this.createAABB(other.size, other.mesh.position);
+      if (this.intersects(a, b)) return true;
+    }
+    return false;
+  }
+
   createAABB(size, pos) {
     const half = new THREE.Vector3(size.x / 2, size.y / 2, size.z / 2);
     return {
