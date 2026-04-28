@@ -38,7 +38,6 @@ const OrientationWidget = ({
     mesh.position.x = THREE.MathUtils.clamp(mesh.position.x, -halfL + size.x / 2, halfL - size.x / 2);
     mesh.position.z = THREE.MathUtils.clamp(mesh.position.z, -halfW + size.z / 2, halfW - size.z / 2);
     mesh.position.y = Math.max(mesh.position.y, 0.1 + size.y / 2);
-
     mesh.updateMatrixWorld(true);
     onPhysicsSync?.(selectedBox);
   };

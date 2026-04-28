@@ -7,7 +7,7 @@ const metricCardStyle = {
   textAlign: 'center'
 };
 
-const SessionSummaryModal = ({ open, metrics, onClose }) => {
+const SessionSummaryModal = ({ open, metrics, onClose, onTryAgain, onContinueToGrade }) => {
   if (!open || !metrics) return null;
 
   const {
@@ -81,22 +81,66 @@ const SessionSummaryModal = ({ open, metrics, onClose }) => {
           the theoretical benchmark based on total box volume.
         </div>
 
-        <button
-          onClick={onClose}
-          style={{
-            width: '100%',
-            border: 'none',
-            borderRadius: '10px',
-            padding: '12px',
-            fontSize: '15px',
-            fontWeight: 700,
-            color: '#fff',
-            background: 'linear-gradient(135deg, #667eea, #764ba2)',
-            cursor: 'pointer'
-          }}
-        >
-          Close Results
-        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {onContinueToGrade && (
+            <button
+              type="button"
+              onClick={onContinueToGrade}
+              style={{
+                width: '100%',
+                border: 'none',
+                borderRadius: '10px',
+                padding: '12px',
+                fontSize: '15px',
+                fontWeight: 700,
+                color: '#fff',
+                background: 'linear-gradient(135deg, #1AA37A, #13815f)',
+                cursor: 'pointer'
+              }}
+            >
+              View utilization grade
+            </button>
+          )}
+          {onTryAgain && (
+            <button
+              type="button"
+              onClick={() => {
+                onTryAgain();
+                onClose();
+              }}
+              style={{
+                width: '100%',
+                border: '2px solid #ced4da',
+                borderRadius: '10px',
+                padding: '12px',
+                fontSize: '15px',
+                fontWeight: 700,
+                color: '#495057',
+                background: '#ffffff',
+                cursor: 'pointer'
+              }}
+            >
+              Try again
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              width: '100%',
+              border: 'none',
+              borderRadius: '10px',
+              padding: '12px',
+              fontSize: '15px',
+              fontWeight: 700,
+              color: '#fff',
+              background: 'linear-gradient(135deg, #667eea, #764ba2)',
+              cursor: 'pointer'
+            }}
+          >
+            Close Results
+          </button>
+        </div>
       </div>
     </div>
   );

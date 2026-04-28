@@ -39,11 +39,11 @@ const ControlPanel = ({
   hasSuggestion,
   isCalcSuggestion,
   suggestionCount = 0,
-  // Becky: stop filter
   activeStopFilter,
   setActiveStopFilter,
-  // Session results
-  onFinishSession
+  onFinishSession,
+  selectedGroupCount = 0,
+  onClearGroup,
 }) => {
   const [isPanelMinimized, setIsPanelMinimized] = useState(false);
   const [panelPosition, setPanelPosition] = useState({ x: 30, y: window.innerHeight - 500 });
@@ -295,8 +295,28 @@ const ControlPanel = ({
             </div>
           </div>
 
+          {selectedGroupCount > 0 && (
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              marginBottom: '12px', padding: '10px 12px', background: '#eef2ff',
+              borderRadius: '8px', fontSize: '12px', fontWeight: 600, color: '#4338ca'
+            }}>
+              <span>Group selected: {selectedGroupCount} boxes</span>
+              <button
+                type="button"
+                onClick={onClearGroup}
+                style={{
+                  background: '#ffffff', border: '1px solid #c7d2fe', color: '#4338ca',
+                  borderRadius: '6px', cursor: 'pointer', fontSize: '11px', padding: '4px 10px'
+                }}
+              >
+                Clear
+              </button>
+            </div>
+          )}
+
           {/* Session summary */}
-          <button onClick={onFinishSession} disabled={boxes.length === 0}
+          <button type="button" onClick={onFinishSession} disabled={boxes.length === 0}
             style={{ ...btnBase,
               background: boxes.length > 0 ? 'linear-gradient(135deg, #f39c12, #e67e22)' : '#f5f5f5',
               color: boxes.length > 0 ? '#ffffff' : '#aaa', border: 'none',
@@ -343,7 +363,8 @@ const ControlPanel = ({
 
           {/* Rotate Box — while dragging, or when orientation panel is open */}
           <button
-            onClick={() => onRotateBox?.()}
+            type="button"
+            onClick={() => (onRotateBox ? onRotateBox() : dragControllerRef.current?.rotateSelected())}
             disabled={!isBoxDragging && !orientEntry}
             style={{ ...btnBase, background: '#ffffff',
               color: (isBoxDragging || orientEntry) ? '#1AA37A' : '#aaa',

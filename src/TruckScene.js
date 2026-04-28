@@ -15,7 +15,9 @@ export function initScene({
   setIsBoxDragging,
   saveToHistoryRef,
   onLayoutChanged,
-  onOrientPick
+  onOrientPick,
+  onGroupChanged,
+  afterPositionChanged,
 }) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xf5f5f5);
@@ -71,17 +73,10 @@ export function initScene({
   world.defaultContactMaterial = new CANNON.ContactMaterial(
     defaultMaterial,
     defaultMaterial,
-    {
-      friction: 0.95,
-      restitution: 0.0
-    }
+    { friction: 0.95, restitution: 0.0 }
   );
-
   world.addContactMaterial(
-    new CANNON.ContactMaterial(defaultMaterial, wallMaterial, {
-      friction: 1.0,
-      restitution: 0.0
-    })
+    new CANNON.ContactMaterial(defaultMaterial, wallMaterial, { friction: 1.0, restitution: 0.0 })
   );
 
   physicsApiRef.current = {
@@ -124,20 +119,12 @@ export function initScene({
   );
 
   const leftWall = new THREE.Mesh(sideWallGeometry, visualWallMaterial);
-  leftWall.position.set(
-    0,
-    TRUCK_DIMENSIONS.height / 2,
-    -TRUCK_DIMENSIONS.width / 2
-  );
+  leftWall.position.set(0, TRUCK_DIMENSIONS.height / 2, -TRUCK_DIMENSIONS.width / 2);
   leftWall.receiveShadow = true;
   truckGroup.add(leftWall);
 
   const rightWall = new THREE.Mesh(sideWallGeometry, visualWallMaterial);
-  rightWall.position.set(
-    0,
-    TRUCK_DIMENSIONS.height / 2,
-    TRUCK_DIMENSIONS.width / 2
-  );
+  rightWall.position.set(0, TRUCK_DIMENSIONS.height / 2, TRUCK_DIMENSIONS.width / 2);
   rightWall.receiveShadow = true;
   truckGroup.add(rightWall);
 
@@ -145,11 +132,7 @@ export function initScene({
     new THREE.BoxGeometry(0.2, TRUCK_DIMENSIONS.height, TRUCK_DIMENSIONS.width),
     visualWallMaterial
   );
-  frontWall.position.set(
-    TRUCK_DIMENSIONS.length / 2,
-    TRUCK_DIMENSIONS.height / 2,
-    0
-  );
+  frontWall.position.set(TRUCK_DIMENSIONS.length / 2, TRUCK_DIMENSIONS.height / 2, 0);
   frontWall.receiveShadow = true;
   truckGroup.add(frontWall);
 
@@ -157,11 +140,7 @@ export function initScene({
     new THREE.BoxGeometry(0.2, TRUCK_DIMENSIONS.height, TRUCK_DIMENSIONS.width),
     visualWallMaterial
   );
-  backWall.position.set(
-    -TRUCK_DIMENSIONS.length / 2,
-    TRUCK_DIMENSIONS.height / 2,
-    0
-  );
+  backWall.position.set(-TRUCK_DIMENSIONS.length / 2, TRUCK_DIMENSIONS.height / 2, 0);
   backWall.receiveShadow = true;
   truckGroup.add(backWall);
 
@@ -182,108 +161,24 @@ export function initScene({
 
   scene.add(truckGroup);
 
-  const floorBody = new CANNON.Body({
-    mass: 0,
-    material: wallMaterial,
-    shape: new CANNON.Box(
-      new CANNON.Vec3(
-        TRUCK_DIMENSIONS.length / 2,
-        0.1,
-        TRUCK_DIMENSIONS.width / 2
-      )
-    ),
-    position: new CANNON.Vec3(0, 0.1, 0)
-  });
-  world.addBody(floorBody);
+  const addStaticBox = (hx, hy, hz, px, py, pz) => {
+    const b = new CANNON.Body({
+      mass: 0,
+      material: wallMaterial,
+      shape: new CANNON.Box(new CANNON.Vec3(hx, hy, hz)),
+      position: new CANNON.Vec3(px, py, pz)
+    });
+    world.addBody(b);
+  };
 
-  const ceilingBody = new CANNON.Body({
-    mass: 0,
-    material: wallMaterial,
-    shape: new CANNON.Box(
-      new CANNON.Vec3(
-        TRUCK_DIMENSIONS.length / 2,
-        0.1,
-        TRUCK_DIMENSIONS.width / 2
-      )
-    ),
-    position: new CANNON.Vec3(0, TRUCK_DIMENSIONS.height - 0.1, 0)
-  });
-  world.addBody(ceilingBody);
-
-  const leftWallBody = new CANNON.Body({
-    mass: 0,
-    material: wallMaterial,
-    shape: new CANNON.Box(
-      new CANNON.Vec3(
-        TRUCK_DIMENSIONS.length / 2,
-        TRUCK_DIMENSIONS.height / 2,
-        0.1
-      )
-    ),
-    position: new CANNON.Vec3(
-      0,
-      TRUCK_DIMENSIONS.height / 2,
-      -TRUCK_DIMENSIONS.width / 2
-    )
-  });
-  world.addBody(leftWallBody);
-
-  const rightWallBody = new CANNON.Body({
-    mass: 0,
-    material: wallMaterial,
-    shape: new CANNON.Box(
-      new CANNON.Vec3(
-        TRUCK_DIMENSIONS.length / 2,
-        TRUCK_DIMENSIONS.height / 2,
-        0.1
-      )
-    ),
-    position: new CANNON.Vec3(
-      0,
-      TRUCK_DIMENSIONS.height / 2,
-      TRUCK_DIMENSIONS.width / 2
-    )
-  });
-  world.addBody(rightWallBody);
-
-  const frontWallBody = new CANNON.Body({
-    mass: 0,
-    material: wallMaterial,
-    shape: new CANNON.Box(
-      new CANNON.Vec3(
-        0.1,
-        TRUCK_DIMENSIONS.height / 2,
-        TRUCK_DIMENSIONS.width / 2
-      )
-    ),
-    position: new CANNON.Vec3(
-      TRUCK_DIMENSIONS.length / 2,
-      TRUCK_DIMENSIONS.height / 2,
-      0
-    )
-  });
-  world.addBody(frontWallBody);
-
-  const backWallBody = new CANNON.Body({
-    mass: 0,
-    material: wallMaterial,
-    shape: new CANNON.Box(
-      new CANNON.Vec3(
-        0.1,
-        TRUCK_DIMENSIONS.height / 2,
-        TRUCK_DIMENSIONS.width / 2
-      )
-    ),
-    position: new CANNON.Vec3(
-      -TRUCK_DIMENSIONS.length / 2,
-      TRUCK_DIMENSIONS.height / 2,
-      0
-    )
-  });
-  world.addBody(backWallBody);
+  addStaticBox(TRUCK_DIMENSIONS.length / 2, 0.1, TRUCK_DIMENSIONS.width / 2, 0, 0.1, 0);
+  addStaticBox(TRUCK_DIMENSIONS.length / 2, 0.1, TRUCK_DIMENSIONS.width / 2, 0, TRUCK_DIMENSIONS.height - 0.1, 0);
+  addStaticBox(TRUCK_DIMENSIONS.length / 2, TRUCK_DIMENSIONS.height / 2, 0.1, 0, TRUCK_DIMENSIONS.height / 2, -TRUCK_DIMENSIONS.width / 2);
+  addStaticBox(TRUCK_DIMENSIONS.length / 2, TRUCK_DIMENSIONS.height / 2, 0.1, 0, TRUCK_DIMENSIONS.height / 2, TRUCK_DIMENSIONS.width / 2);
+  addStaticBox(0.1, TRUCK_DIMENSIONS.height / 2, TRUCK_DIMENSIONS.width / 2, TRUCK_DIMENSIONS.length / 2, TRUCK_DIMENSIONS.height / 2, 0);
+  addStaticBox(0.1, TRUCK_DIMENSIONS.height / 2, TRUCK_DIMENSIONS.width / 2, -TRUCK_DIMENSIONS.length / 2, TRUCK_DIMENSIONS.height / 2, 0);
 
   const bayGroup = new THREE.Group();
-
   const bayFloor = new THREE.Mesh(
     new THREE.PlaneGeometry(20, 15),
     new THREE.MeshStandardMaterial({
@@ -299,15 +194,7 @@ export function initScene({
   bayFloor.receiveShadow = true;
   bayGroup.add(bayFloor);
 
-  // Physics floor for staging / bay (matches PlaneGeometry 20×15 at y≈0, centered at x=-40).
-  // Without this, boxes spawned in the bay fall through — only the truck bed had collision.
-  const bayFloorBody = new CANNON.Body({
-    mass: 0,
-    material: wallMaterial,
-    shape: new CANNON.Box(new CANNON.Vec3(10, 0.08, 7.5)),
-    position: new CANNON.Vec3(-40, 0.08, 0)
-  });
-  world.addBody(bayFloorBody);
+  addStaticBox(10, 0.08, 7.5, -40, 0.08, 0);
 
   const bayBorderPoints = [
     new THREE.Vector3(-50, 0.02, -7.5),
@@ -316,7 +203,6 @@ export function initScene({
     new THREE.Vector3(-50, 0.02, 7.5),
     new THREE.Vector3(-50, 0.02, -7.5)
   ];
-
   bayGroup.add(
     new THREE.Line(
       new THREE.BufferGeometry().setFromPoints(bayBorderPoints),
@@ -403,11 +289,13 @@ export function initScene({
       if (saveToHistoryRef.current) {
         saveToHistoryRef.current(mesh, oldPos, newPos);
       }
+      afterPositionChanged?.(mesh);
     },
     onTransformChanged: () => {
       onLayoutChanged?.();
     },
-    onOrientPick
+    onOrientPick,
+    onGroupChanged,
   });
 
   let lastTime = performance.now();
@@ -417,7 +305,6 @@ export function initScene({
 
   const animate = () => {
     animationFrameId = requestAnimationFrame(animate);
-
     const delta = Math.min(clock.getDelta(), 1 / 20);
 
     if (physicsEnabledRef.current && cargoRegistry.length > 0) {
@@ -426,13 +313,11 @@ export function initScene({
 
     for (const entry of cargoRegistry) {
       if (!entry.body || !entry.mesh) continue;
-
       entry.mesh.position.set(
         entry.body.position.x,
         entry.body.position.y,
         entry.body.position.z
       );
-
       entry.mesh.quaternion.set(
         entry.body.quaternion.x,
         entry.body.quaternion.y,
@@ -472,19 +357,15 @@ export function initScene({
     window.removeEventListener('resize', handleResize);
     controls.dispose();
     dragController.destroy();
-
     for (const entry of cargoRegistry) {
       if (entry.body) world.removeBody(entry.body);
       if (entry.mesh?.geometry) entry.mesh.geometry.dispose();
       if (entry.baseMaterial) entry.baseMaterial.dispose();
     }
-
     renderer.dispose();
-
     if (mountEl.contains(renderer.domElement)) {
       mountEl.removeChild(renderer.domElement);
     }
-
     physicsApiRef.current = null;
   };
 

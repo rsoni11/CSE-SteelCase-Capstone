@@ -20,7 +20,9 @@ import ControlPanel from './ControlPanel';
 import ControlsGuide from './ControlsGuide';
 import ShipmentSummary from './ShipmentSummary';             // Becky
 import SessionSummaryModal from './SessionSummaryModal';
+import SessionCompleteScreen from './SessionCompleteScreen';
 import OrientationWidget from './OrientationWidget';
+import { StabilitySystem } from './StabilitySystem';
 
 // ── US5 Rhea: floating FRAGILE sprite ─────────────────────────────────────
 function createFragileLabel(heightFt) {
@@ -57,6 +59,8 @@ const TruckLoadingPrototype = () => {
   const physicsEnabledRef  = useRef(true);
   const physicsApiRef      = useRef(null);
   const ghostPreviewRef    = useRef(null);
+  const stabilitySystemRef = useRef(null);
+  const initialLoadSnapshotRef = useRef(null);
   // US6 Yash: geometry/material caches
   const geometryCacheRef   = useRef(new Map());
   const edgeCacheRef       = useRef(new Map());
@@ -92,6 +96,9 @@ const TruckLoadingPrototype = () => {
   const [fragileWarning, setFragileWarning]           = useState(null);
   const [orientEntry, setOrientEntry]                 = useState(null);
   const [orientWidgetPos, setOrientWidgetPos]         = useState({ x: 0, y: 0 });
+  const [stabilityWarning, setStabilityWarning]       = useState(null);
+  const [selectedGroupIds, setSelectedGroupIds]       = useState([]);
+  const [showSessionComplete, setShowSessionComplete] = useState(false);
 
   // ── History ────────────────────────────────────────────────────────────────
   const { history, historyIndex, saveToHistory, undo, redo, clearHistory } =
@@ -120,6 +127,12 @@ const TruckLoadingPrototype = () => {
     const t = setTimeout(() => setFragileWarning(null), 4000);
     return () => clearTimeout(t);
   }, [fragileWarning]);
+
+  useEffect(() => {
+    if (!stabilityWarning || stabilityWarning.status === 'blocked') return;
+    const t = setTimeout(() => setStabilityWarning(null), 5000);
+    return () => clearTimeout(t);
+  }, [stabilityWarning]);
 
   // ── Becky: update selectedBoxType when stop filter changes ────────────────
   const filteredBoxes = activeStopFilter
@@ -210,25 +223,72 @@ const TruckLoadingPrototype = () => {
     return Array.from(grouped.values());
   }, []);
 
+  const checkStabilityAfterMove = useCallback((entry) => {
+    if (!stabilitySystemRef.current) return;
+    const result = stabilitySystemRef.current.evaluate(
+      entry.mesh.position,
+      entry.size,
+      entry.mesh
+    );
+    if (result.status === 'ok') {
+      setStabilityWarning(null);
+    } else {
+      setStabilityWarning({ message: result.message, status: result.status });
+    }
+  }, []);
+
+  const checkStabilityOnPlace = useCallback((pos, size) => {
+    if (!stabilitySystemRef.current) return true;
+    const result = stabilitySystemRef.current.evaluate(pos, size);
+    if (result.status === 'blocked') {
+      setStabilityWarning({ message: result.message, status: 'blocked' });
+      return false;
+    }
+    if (result.status === 'warn') {
+      setStabilityWarning({ message: result.message, status: 'warn' });
+    } else {
+      setStabilityWarning(null);
+    }
+    return true;
+  }, []);
+
   // ── Scene init ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!mountRef.current) return;
     const { scene, camera, renderer, dragController, cleanup } = initScene({
-      mountEl: mountRef.current, cargoRegistry: cargoRegistryRef.current,
-      physicsEnabledRef, physicsApiRef, setStats, setIsLoading, setIsBoxDragging, saveToHistoryRef,
+      mountEl: mountRef.current,
+      cargoRegistry: cargoRegistryRef.current,
+      physicsEnabledRef,
+      physicsApiRef,
+      setStats,
+      setIsLoading,
+      setIsBoxDragging,
+      saveToHistoryRef,
       onLayoutChanged: () => setLayoutVersion(prev => prev + 1),
       onOrientPick: (entry, cx, cy) => {
         setOrientEntry(entry);
         setOrientWidgetPos({ x: cx, y: cy });
-      }
+      },
+      onGroupChanged: (ids) => setSelectedGroupIds([...ids]),
+      afterPositionChanged: (mesh) => {
+        const entry = cargoRegistryRef.current.find(e => e.mesh === mesh);
+        if (entry) checkStabilityAfterMove(entry);
+      },
     });
-    sceneRef.current          = scene;
-    cameraRef.current         = camera;
-    rendererRef.current       = renderer;
-    dragControllerRef.current = dragController;
-    ghostPreviewRef.current   = new GhostPreview(scene);
-    return () => { ghostPreviewRef.current?.hide(); cleanup(); disposeSharedResources(); };
-  }, []);
+    sceneRef.current           = scene;
+    cameraRef.current          = camera;
+    rendererRef.current        = renderer;
+    dragControllerRef.current  = dragController;
+    ghostPreviewRef.current    = new GhostPreview(scene);
+    stabilitySystemRef.current = new StabilitySystem(cargoRegistryRef.current);
+
+    return () => {
+      ghostPreviewRef.current?.hide();
+      stabilitySystemRef.current = null;
+      cleanup();
+      disposeSharedResources();
+    };
+  }, [checkStabilityAfterMove]);
 
   // US1: auto-select first load example on mount
   useEffect(() => {
@@ -331,7 +391,6 @@ const TruckLoadingPrototype = () => {
       const hgtIdx  = headers.indexOf('Height');
       const qtyIdx  = headers.indexOf('# Pieces');
       const stopIdx = headers.indexOf('Stop');
-      const descIdx = headers.indexOf('Parcel Descript');
       if (lenIdx === -1 || widIdx === -1 || hgtIdx === -1) {
         alert('Error: CSV missing Length, Width, or Height columns.'); return;
       }
@@ -470,6 +529,8 @@ const TruckLoadingPrototype = () => {
     setBoxes(prev => [...prev, { id: entry.id, mesh: box, type: boxType.id }]);
     setStats(prev => ({ ...prev, boxCount: prev.boxCount + 1 }));
     setLayoutVersion(prev => prev + 1);
+    ghostPreviewRef.current?.hide();
+    setSuggestion(null);
 
     // US5: check stacking after state settles
     setTimeout(() => checkFragileStacking(entry), 100);
@@ -525,6 +586,7 @@ const TruckLoadingPrototype = () => {
 
   // ── Clear Boxes ────────────────────────────────────────────────────────────
   const clearBoxes = useCallback(({ clearQueue = true } = {}) => {
+    dragControllerRef.current?.clearRegistry();
     const physicsWorld = physicsApiRef.current?.world;
     [...cargoRegistryRef.current].forEach(e => {
       if (e?.body && physicsWorld) physicsWorld.removeBody(e.body);
@@ -532,14 +594,15 @@ const TruckLoadingPrototype = () => {
       e.mesh?.clear();
     });
     cargoRegistryRef.current.length = 0;
-    dragControllerRef.current?.clearRegistry();
     ghostPreviewRef.current?.hide();
     setSuggestion(null);
     setSuggestionCandidates([]);
     setBoxes([]);
     setStats(prev => ({ ...prev, boxCount: 0 }));
     setFragileWarning(null);
+    setStabilityWarning(null);
     setOrientEntry(null);
+    setSelectedGroupIds([]);
     setLayoutVersion(prev => prev + 1);
     if (clearQueue) {
       setBoxQueue([]); setQueueSummary([]);
@@ -640,9 +703,62 @@ const TruckLoadingPrototype = () => {
   const handleFinishSession = useCallback(() => {
     const metrics = computeSessionSummaryMetrics();
     if (!metrics) return;
+    initialLoadSnapshotRef.current = cargoRegistryRef.current.map(e => ({
+      type: e.type,
+      fragile: e.fragile,
+      label: e.label,
+      position: e.mesh.position.clone(),
+      rotation: e.mesh.rotation.clone(),
+      dimensions: { ...e.dimensions },
+      physics: { ...e.physics },
+      color: e.baseMaterial?.color ? '#' + e.baseMaterial.color.getHexString() : '#888'
+    }));
     setSessionSummaryMetrics(metrics);
     setShowSessionSummary(true);
   }, [computeSessionSummaryMetrics]);
+
+  const handleTryAgain = useCallback(() => {
+    const snapshot = initialLoadSnapshotRef.current;
+    clearBoxes({ clearQueue: false });
+    setShowSessionComplete(false);
+    if (!snapshot?.length) return;
+    setTimeout(() => {
+      snapshot.forEach(({ type, fragile, label, position, rotation, dimensions, physics, color }) => {
+        if (!sceneRef.current) return;
+        const boxType = { id: type, label, color, dimensions, physics, fragile: fragile ?? false };
+        const isFragile = fragile ?? false;
+        const mesh = new THREE.Mesh(getSharedGeometry(dimensions), getSharedMaterial(boxType));
+        mesh.position.copy(position);
+        mesh.rotation.copy(rotation);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.add(new THREE.LineSegments(getSharedEdges(dimensions), isFragile ? fragilePinkLineRef.current : lineMaterialRef.current));
+        if (isFragile) mesh.add(createFragileLabel(dimensions.height));
+        sceneRef.current.add(mesh);
+        const body = createBoxBody(boxType, mesh);
+        const entry = {
+          id: `${type}-tryagain-${Date.now()}-${Math.random()}`,
+          type,
+          label,
+          mesh,
+          body,
+          size: { x: dimensions.width, y: dimensions.height, z: dimensions.depth },
+          dimensions: { ...dimensions },
+          physics: { ...physics },
+          fragile: isFragile,
+          baseMaterial: getSharedMaterial(boxType)
+        };
+        cargoRegistryRef.current.push(entry);
+        setBoxes(prev => [...prev, { id: entry.id, mesh, type }]);
+        setStats(prev => ({ ...prev, boxCount: prev.boxCount + 1 }));
+      });
+    }, 50);
+  }, [clearBoxes]);
+
+  const handleClearGroup = useCallback(() => {
+    dragControllerRef.current?.clearGroup();
+    setSelectedGroupIds([]);
+  }, []);
 
   // ── AI Best Fit ────────────────────────────────────────────────────────────
   const handleSuggestPlacement = useCallback(() => {
@@ -658,6 +774,8 @@ const TruckLoadingPrototype = () => {
     if (!suggestion || boxes.length === 0) return;
     const lastEntry = cargoRegistryRef.current[cargoRegistryRef.current.length - 1];
     if (!lastEntry) return;
+    if (!checkStabilityOnPlace(suggestion.position, suggestion.size)) return;
+
     const oldPos = lastEntry.mesh.position.clone();
     lastEntry.mesh.position.copy(suggestion.position);
     if (suggestion.quaternion) lastEntry.mesh.quaternion.copy(suggestion.quaternion);
@@ -674,8 +792,11 @@ const TruckLoadingPrototype = () => {
     }
     saveToHistoryRef.current?.(lastEntry.mesh, oldPos, suggestion.position);
     setLayoutVersion(prev => prev + 1);
+    ghostPreviewRef.current?.hide();
+    setSuggestion(null);
+    setSuggestionCandidates([]);
     setTimeout(() => checkFragileStacking(lastEntry), 100);
-  }, [suggestion, boxes.length, checkFragileStacking]);
+  }, [suggestion, boxes.length, checkFragileStacking, checkStabilityOnPlace]);
 
   const handleUndo = useCallback(() => {
     undo();
@@ -768,6 +889,8 @@ const TruckLoadingPrototype = () => {
         activeStopFilter={activeStopFilter}
         setActiveStopFilter={setActiveStopFilter}
         onFinishSession={handleFinishSession}
+        selectedGroupCount={selectedGroupIds.length}
+        onClearGroup={handleClearGroup}
       />
 
       {orientEntry && (
@@ -804,7 +927,66 @@ const TruckLoadingPrototype = () => {
         open={showSessionSummary}
         metrics={sessionSummaryMetrics}
         onClose={() => setShowSessionSummary(false)}
+        onTryAgain={handleTryAgain}
+        onContinueToGrade={() => {
+          setShowSessionSummary(false);
+          setShowSessionComplete(true);
+        }}
       />
+
+      {stabilityWarning && (
+        <div style={{
+          position: 'absolute',
+          bottom: fragileWarning ? '88px' : '32px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: stabilityWarning.status === 'blocked'
+            ? 'linear-gradient(135deg, #c0392b, #922b21)'
+            : 'linear-gradient(135deg, #f39c12, #d68910)',
+          color: '#fff',
+          borderRadius: '12px',
+          padding: '14px 24px',
+          fontSize: '14px',
+          fontWeight: 700,
+          boxShadow: stabilityWarning.status === 'blocked'
+            ? '0 6px 24px rgba(192,57,43,0.5)'
+            : '0 6px 24px rgba(243,156,18,0.5)',
+          zIndex: 51,
+          maxWidth: '560px',
+          textAlign: 'center',
+          animation: 'toastSlideUp 0.3s ease'
+        }}>
+          {stabilityWarning.message}
+          {stabilityWarning.status !== 'blocked' && (
+            <button
+              type="button"
+              onClick={() => setStabilityWarning(null)}
+              style={{
+                marginLeft: '16px',
+                background: 'rgba(255,255,255,0.25)',
+                border: 'none',
+                borderRadius: '6px',
+                color: '#fff',
+                padding: '2px 10px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: 700
+              }}
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      )}
+
+      {showSessionComplete && (
+        <SessionCompleteScreen
+          usedVolume={usedVolume}
+          totalBoxes={boxes.length}
+          onTryAgain={handleTryAgain}
+          onDismiss={() => setShowSessionComplete(false)}
+        />
+      )}
 
       <style>{`
         @keyframes spin { 0% { transform:rotate(0deg) } 100% { transform:rotate(360deg) } }
