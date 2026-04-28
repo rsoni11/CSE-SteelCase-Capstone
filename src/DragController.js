@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { TRUCK_DIMENSIONS } from './constants';
 
+const FLOOR_CONTACT_Y = 0.1;
+
 // Drag controller - Yash (US3)
 export class DragController {
   constructor({
@@ -11,7 +13,9 @@ export class DragController {
     cargoRegistry,
     collisionSystem,
     onDragStateChange,
-    onPositionChanged
+    onPositionChanged,
+    onTransformChanged,
+    onOrientPick
   }) {
     this.camera = camera;
     this.domElement = domElement;
@@ -20,12 +24,15 @@ export class DragController {
     this.collisionSystem = collisionSystem;
     this.onDragStateChange = onDragStateChange;
     this.onPositionChanged = onPositionChanged;
+    this.onTransformChanged = onTransformChanged;
+    this.onOrientPick = onOrientPick;
 
     this.raycaster = new THREE.Raycaster();
     this.mouse = new THREE.Vector2();
     this.dragging = false;
     this.selectedEntry = null;
     this.originalPosition = null;
+    this.originalQuaternion = null;
 
     this.currentY = 0;
     this.manualYOffset = 0;
@@ -49,8 +56,10 @@ export class DragController {
     this._onUp = () => this.onUp();
     this._onWheel = e => this.onWheel(e);
     this._onKey = e => this.onKeyDown(e);
+    this._onDblClick = e => this.onDblClick(e);
 
     domElement.addEventListener('pointerdown', this._onDown);
+    domElement.addEventListener('dblclick', this._onDblClick);
     window.addEventListener('pointermove', this._onMove);
     window.addEventListener('pointerup', this._onUp);
     domElement.addEventListener('wheel', this._onWheel, { passive: false });
@@ -158,6 +167,96 @@ export class DragController {
     return baseY;
   }
 
+  /** dblclick uses the DOM event (not pointer detail) — avoids fighting OrbitControls / PointerEvent quirks */
+  onDblClick(e) {
+    if (!this.onOrientPick) return;
+    this.setMouse(e);
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+
+    const hits = this.raycaster.intersectObjects(this.getMeshes(), true);
+    if (!hits.length) return;
+
+    let entry = null;
+    for (const hit of hits) {
+      entry = this.findEntryFromHitObject(hit.object);
+      if (entry) break;
+    }
+    if (!entry) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    this.onOrientPick(entry, e.clientX, e.clientY);
+  }
+
+  clampPositionAfterResize(entry) {
+    const mesh = entry.mesh;
+    const size = entry.size;
+    const halfL = TRUCK_DIMENSIONS.length / 2;
+    const halfW = TRUCK_DIMENSIONS.width / 2;
+
+    mesh.position.x = THREE.MathUtils.clamp(
+      mesh.position.x,
+      -halfL + size.x / 2,
+      halfL - size.x / 2
+    );
+    mesh.position.z = THREE.MathUtils.clamp(
+      mesh.position.z,
+      -halfW + size.z / 2,
+      halfW - size.z / 2
+    );
+    mesh.position.y = Math.max(mesh.position.y, FLOOR_CONTACT_Y + size.y / 2);
+  }
+
+  /**
+   * 90° turn on Y: swap footprint width/depth for CollisionSystem + sync Cannon quaternion.
+   */
+  _tryRotate90Y(entry, { dragging }) {
+    const mesh = entry.mesh;
+    const originalQuat = mesh.quaternion.clone();
+
+    mesh.rotation.y += Math.PI / 2;
+
+    const sx = entry.size.x;
+    entry.size.x = entry.size.z;
+    entry.size.z = sx;
+
+    this.clampPositionAfterResize(entry);
+
+    const pos = mesh.position.clone();
+    const collides = this.collisionSystem.wouldCollide(mesh, pos, entry.size);
+
+    if (collides) {
+      mesh.quaternion.copy(originalQuat);
+      entry.size.x = entry.size.z;
+      entry.size.z = sx;
+      if (dragging && this.selectedEntry === entry) mesh.material = this.collisionMaterial;
+      return false;
+    }
+
+    mesh.updateMatrixWorld(true);
+    this.syncBodyWithMesh(entry);
+    if (dragging && this.selectedEntry === entry) mesh.material = this.highlightMaterial;
+    this.onTransformChanged?.(entry.mesh, { moved: false, rotated: true });
+    return true;
+  }
+
+  /** Rotate while dragging (R key / panel when dragging) */
+  rotateSelected() {
+    if (!this.dragging || !this.selectedEntry) return;
+    this._tryRotate90Y(this.selectedEntry, { dragging: true });
+  }
+
+  /** Rotate any placed box from orientation widget or panel when that box is selected */
+  rotateEntry(entry) {
+    if (!entry?.mesh || !this.cargoRegistry.includes(entry)) return;
+    this._tryRotate90Y(entry, { dragging: false });
+  }
+
+  exitOrientMode(entry) {
+    if (!entry) return;
+    this.syncBodyWithMesh(entry);
+  }
+
   onDown(e) {
     this.setMouse(e);
     this.raycaster.setFromCamera(this.mouse, this.camera);
@@ -174,6 +273,7 @@ export class DragController {
 
     this.selectedEntry = entry;
     this.originalPosition = entry.mesh.position.clone();
+    this.originalQuaternion = entry.mesh.quaternion.clone();
     this.currentY = entry.mesh.position.y;
     this.manualYOffset = 0;
     this.lastWorldPoint = entry.mesh.position.clone();
@@ -255,30 +355,6 @@ export class DragController {
     }
   }
 
-  rotateSelected() {
-    if (!this.dragging || !this.selectedEntry) return;
-
-    const mesh = this.selectedEntry.mesh;
-    const original = mesh.quaternion.clone();
-    mesh.rotation.y += Math.PI / 2;
-
-    const pos = mesh.position.clone();
-    const collides = this.collisionSystem.wouldCollide(
-      mesh,
-      pos,
-      this.selectedEntry.size
-    );
-
-    if (collides) {
-      mesh.quaternion.copy(original);
-      mesh.material = this.collisionMaterial;
-      return;
-    }
-
-    mesh.material = this.highlightMaterial;
-    this.syncBodyWithMesh(this.selectedEntry);
-  }
-
   onWheel(e) {
     if (!this.dragging || !this.selectedEntry) return;
     e.preventDefault();
@@ -318,10 +394,17 @@ export class DragController {
         );
       }
     }
+    if (this.onTransformChanged && this.originalQuaternion) {
+      const newQuat = this.selectedEntry.mesh.quaternion.clone();
+      const moved = !this.originalPosition?.equals(this.selectedEntry.mesh.position);
+      const rotated = !this.originalQuaternion.equals(newQuat);
+      if (moved || rotated) this.onTransformChanged(this.selectedEntry.mesh, { moved, rotated });
+    }
 
     this.dragging = false;
     this.selectedEntry = null;
     this.originalPosition = null;
+    this.originalQuaternion = null;
     this.manualYOffset = 0;
     this.lastWorldPoint = null;
 
@@ -334,12 +417,14 @@ export class DragController {
     this.dragging = false;
     this.selectedEntry = null;
     this.originalPosition = null;
+    this.originalQuaternion = null;
     this.manualYOffset = 0;
     this.lastWorldPoint = null;
   }
 
   destroy() {
     this.domElement.removeEventListener('pointerdown', this._onDown);
+    this.domElement.removeEventListener('dblclick', this._onDblClick);
     window.removeEventListener('pointermove', this._onMove);
     window.removeEventListener('pointerup', this._onUp);
     this.domElement.removeEventListener('wheel', this._onWheel);

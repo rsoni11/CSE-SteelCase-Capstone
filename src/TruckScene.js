@@ -14,6 +14,8 @@ export function initScene({
   setIsLoading,
   setIsBoxDragging,
   saveToHistoryRef,
+  onLayoutChanged,
+  onOrientPick
 }) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xf5f5f5);
@@ -393,7 +395,6 @@ export function initScene({
     truckDimensions: TRUCK_DIMENSIONS,
     cargoRegistry,
     collisionSystem,
-    physicsWorld: world,
     onDragStateChange: (dragging) => {
       controls.enabled = !dragging;
       setIsBoxDragging(dragging);
@@ -402,7 +403,11 @@ export function initScene({
       if (saveToHistoryRef.current) {
         saveToHistoryRef.current(mesh, oldPos, newPos);
       }
-    }
+    },
+    onTransformChanged: () => {
+      onLayoutChanged?.();
+    },
+    onOrientPick
   });
 
   let lastTime = performance.now();

@@ -45,7 +45,8 @@ const ControlsGuide = () => {
             <div><strong>Move box:</strong> Click + drag</div>
             <div><strong>Raise:</strong> W / ↑ while dragging</div>
             <div><strong>Lower:</strong> S / ↓ while dragging</div>
-            <div><strong>Rotate:</strong> Double-click box</div>
+            <div><strong>Rotate 90°:</strong> R / panel while dragging</div>
+            <div><strong>Tilt / roll:</strong> Double-click a box</div>
             <div><strong style={{ color: '#4aa3ff' }}>Blue:</strong> Valid placement</div>
             <div><strong style={{ color: '#ff0000' }}>Red:</strong> Collision!</div>
           </div>

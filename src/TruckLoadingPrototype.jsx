@@ -7,161 +7,204 @@ import {
   TRUCK_DIMENSIONS,
   TRUCK_VOLUME,
   MAX_BOXES,
-  STRESS_TEST_TARGET
+  STRESS_TEST_TARGET,         // US6 Yash
+  HEAVY_BOX_MASS_THRESHOLD    // US5 Rhea
 } from './constants';
-import { STEELCASE_LOAD_EXAMPLES } from './loadExamples';
+import { STEELCASE_LOAD_EXAMPLES } from './loadExamples';   // US1 Yash
 import { initScene } from './TruckScene';
 import { useHistory } from './useHistory';
-import { FitSuggestionSystem } from './FitSuggestionSystem';
 import { GhostPreview } from './GhostPreview';
+import { getPlacementSuggestions } from './placementSuggestions';
 import Header from './Header';
 import ControlPanel from './ControlPanel';
 import ControlsGuide from './ControlsGuide';
+import ShipmentSummary from './ShipmentSummary';             // Becky
+import SessionSummaryModal from './SessionSummaryModal';
+import OrientationWidget from './OrientationWidget';
+
+// ── US5 Rhea: floating FRAGILE sprite ─────────────────────────────────────
+function createFragileLabel(heightFt) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256; canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(231,76,60,0.88)';
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(4, 4, 248, 56, 10);
+  else ctx.rect(4, 4, 248, 56);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 26px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('⚠ FRAGILE', 128, 32);
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false })
+  );
+  sprite.scale.set(1.2, 0.3, 1);
+  sprite.position.set(0, heightFt / 2 + 0.28, 0);
+  return sprite;
+}
 
 const TruckLoadingPrototype = () => {
   // ── Refs ───────────────────────────────────────────────────────────────────
-  const mountRef          = useRef(null);
-  const sceneRef          = useRef(null);
-  const cameraRef         = useRef(null);
-  const rendererRef       = useRef(null);
-  const dragControllerRef = useRef(null);
-  const cargoRegistryRef  = useRef([]);
-  const saveToHistoryRef  = useRef(null);
-  const physicsEnabledRef = useRef(true);
-  const physicsApiRef     = useRef(null);
-  const ghostPreviewRef   = useRef(null);
-  const fitSystemRef      = useRef(null);
-  const geometryCacheRef  = useRef(new Map());
-  const edgeCacheRef      = useRef(new Map());
-  const materialCacheRef  = useRef(new Map());
-  const lineMaterialRef   = useRef(new THREE.LineBasicMaterial({ color: 0x000000 }));
-  const statsRef          = useRef({ fps: 60, boxCount: 0 });
+  const mountRef           = useRef(null);
+  const sceneRef           = useRef(null);
+  const cameraRef          = useRef(null);
+  const rendererRef        = useRef(null);
+  const dragControllerRef  = useRef(null);
+  const cargoRegistryRef   = useRef([]);
+  const saveToHistoryRef   = useRef(null);
+  const physicsEnabledRef  = useRef(true);
+  const physicsApiRef      = useRef(null);
+  const ghostPreviewRef    = useRef(null);
+  // US6 Yash: geometry/material caches
+  const geometryCacheRef   = useRef(new Map());
+  const edgeCacheRef       = useRef(new Map());
+  const materialCacheRef   = useRef(new Map());
+  const lineMaterialRef    = useRef(new THREE.LineBasicMaterial({ color: 0x000000 }));
+  const fragilePinkLineRef = useRef(new THREE.LineBasicMaterial({ color: 0xff0066 })); // US5
+  const statsRef           = useRef({ fps: 60, boxCount: 0 });
 
   // ── State ──────────────────────────────────────────────────────────────────
-  const [boxes, setBoxes]                       = useState([]);
-  const [availableBoxes, setAvailableBoxes]     = useState(BOX_CONFIGS);
-  const [selectedBoxType, setSelectedBoxType]   = useState(BOX_CONFIGS[0]);
-  const [stats, setStats]                       = useState({ fps: 60, boxCount: 0 });
-  const [isLoading, setIsLoading]               = useState(true);
-  const [isBoxDragging, setIsBoxDragging]       = useState(false);
-  const [suggestion, setSuggestion]             = useState(null);
-  const [isCalcSuggestion, setIsCalcSuggestion] = useState(false);
-  const [boxQueue, setBoxQueue]                 = useState([]);
+  const [boxes, setBoxes]                             = useState([]);
+  const [availableBoxes, setAvailableBoxes]           = useState(BOX_CONFIGS);
+  const [selectedBoxType, setSelectedBoxType]         = useState(BOX_CONFIGS[0]);
+  const [stats, setStats]                             = useState({ fps: 60, boxCount: 0 });
+  const [isLoading, setIsLoading]                     = useState(true);
+  const [isBoxDragging, setIsBoxDragging]             = useState(false);
+  const [suggestion, setSuggestion]                   = useState(null);
+  const [suggestionCandidates, setSuggestionCandidates] = useState([]);
+  const [isCalcSuggestion, setIsCalcSuggestion]       = useState(false);
+  const [layoutVersion, setLayoutVersion]             = useState(0);
+  // US1 Yash: load examples + queue
+  const [boxQueue, setBoxQueue]                       = useState([]);
   const [selectedExampleName, setSelectedExampleName] = useState('Manual');
-  const [selectedExampleId, setSelectedExampleId] = useState(null);
-  const [stressResult, setStressResult]         = useState(null);
+  const [selectedExampleId, setSelectedExampleId]     = useState(null);
+  const [queueSummary, setQueueSummary]               = useState([]);
+  // US6 Yash: stress test
+  const [stressResult, setStressResult]               = useState(null);
   const [isStressTestRunning, setIsStressTestRunning] = useState(false);
-  const [queueSummary, setQueueSummary]         = useState([]);
+  // Becky: stop filter (ShipmentSummary)
+  const [activeStopFilter, setActiveStopFilter]       = useState(null);
+  const [showSessionSummary, setShowSessionSummary]   = useState(false);
+  const [sessionSummaryMetrics, setSessionSummaryMetrics] = useState(null);
+  // US5 Rhea: fragile warning toast
+  const [fragileWarning, setFragileWarning]           = useState(null);
+  const [orientEntry, setOrientEntry]                 = useState(null);
+  const [orientWidgetPos, setOrientWidgetPos]         = useState({ x: 0, y: 0 });
 
-  // ── History (undo/redo) ────────────────────────────────────────────────────
+  // ── History ────────────────────────────────────────────────────────────────
   const { history, historyIndex, saveToHistory, undo, redo, clearHistory } =
     useHistory(cargoRegistryRef, rendererRef, sceneRef, cameraRef);
-
   saveToHistoryRef.current = saveToHistory;
 
   // ── Space utilization ──────────────────────────────────────────────────────
   const usedVolume = boxes.reduce((total, box) => {
     const pos = box.mesh.position;
     const isInsideTruck =
-      pos.x > -TRUCK_DIMENSIONS.length / 2 &&
-      pos.x < TRUCK_DIMENSIONS.length / 2 &&
-      pos.z > -TRUCK_DIMENSIONS.width / 2 &&
-      pos.z < TRUCK_DIMENSIONS.width / 2;
-
+      pos.x > -TRUCK_DIMENSIONS.length / 2 && pos.x < TRUCK_DIMENSIONS.length / 2 &&
+      pos.z > -TRUCK_DIMENSIONS.width  / 2 && pos.z < TRUCK_DIMENSIONS.width  / 2;
     if (!isInsideTruck) return total;
-
-    // Use availableBoxes instead of just BOX_CONFIGS so uploaded items count!
-    const config = availableBoxes.find((c) => c.id === box.type) || BOX_CONFIGS.find((c) => c.id === box.type);
+    const config = availableBoxes.find(c => c.id === box.type) || BOX_CONFIGS.find(c => c.id === box.type);
     if (!config) return total;
-
-    const { width, height, depth } = config.dimensions;
-    return total + width * height * depth;
+    return total + config.dimensions.width * config.dimensions.height * config.dimensions.depth;
   }, 0);
 
   const volumePercentage = ((usedVolume / TRUCK_VOLUME) * 100).toFixed(2);
 
-  useEffect(() => {
-    statsRef.current = stats;
-  }, [stats]);
+  useEffect(() => { statsRef.current = stats; }, [stats]);
 
-  const getDimensionKey = (dimensions) =>
-    `${dimensions.width.toFixed(3)}-${dimensions.height.toFixed(3)}-${dimensions.depth.toFixed(3)}`;
+  // ── US5 Rhea: auto-dismiss fragile warning after 4 s ─────────────────────
+  useEffect(() => {
+    if (!fragileWarning) return;
+    const t = setTimeout(() => setFragileWarning(null), 4000);
+    return () => clearTimeout(t);
+  }, [fragileWarning]);
+
+  // ── Becky: update selectedBoxType when stop filter changes ────────────────
+  const filteredBoxes = activeStopFilter
+    ? availableBoxes.filter(box => box.stop === activeStopFilter && !box.isZeroDim)
+    : availableBoxes;
+
+  useEffect(() => {
+    if (activeStopFilter) {
+      const boxesForStop = availableBoxes.filter(box => box.stop === activeStopFilter && !box.isZeroDim);
+      if (boxesForStop.length > 0) setSelectedBoxType(boxesForStop[0]);
+      else setSelectedBoxType(null);
+    }
+    // When filter cleared, restore first available box
+    else if (availableBoxes.length > 0) {
+      setSelectedBoxType(availableBoxes[0]);
+    }
+  }, [activeStopFilter, availableBoxes]);
+
+  // ── US6 Yash: geometry / material caches ──────────────────────────────────
+  const getDimensionKey = (d) => `${d.width.toFixed(3)}-${d.height.toFixed(3)}-${d.depth.toFixed(3)}`;
 
   const getSharedGeometry = (dimensions) => {
     const key = getDimensionKey(dimensions);
-    if (!geometryCacheRef.current.has(key)) {
-      geometryCacheRef.current.set(
-        key,
-        new THREE.BoxGeometry(dimensions.width, dimensions.height, dimensions.depth)
-      );
-    }
+    if (!geometryCacheRef.current.has(key))
+      geometryCacheRef.current.set(key, new THREE.BoxGeometry(dimensions.width, dimensions.height, dimensions.depth));
     return geometryCacheRef.current.get(key);
   };
 
   const getSharedEdges = (dimensions) => {
     const key = getDimensionKey(dimensions);
-    if (!edgeCacheRef.current.has(key)) {
+    if (!edgeCacheRef.current.has(key))
       edgeCacheRef.current.set(key, new THREE.EdgesGeometry(getSharedGeometry(dimensions)));
-    }
     return edgeCacheRef.current.get(key);
   };
 
+  // US5: fragile boxes get pink material, cached separately
   const getSharedMaterial = (boxType) => {
-    const key = `${boxType.color}`;
+    const isFragile = boxType.fragile ?? false;
+    const key = isFragile ? `fragile-${boxType.color}` : `${boxType.color}`;
     if (!materialCacheRef.current.has(key)) {
-      materialCacheRef.current.set(
-        key,
-        new THREE.MeshStandardMaterial({
-          color: boxType.color,
-          roughness: 0.5,
-          metalness: 0.1
-        })
-      );
+      materialCacheRef.current.set(key, new THREE.MeshStandardMaterial({
+        color:     isFragile ? 0xff69b4 : boxType.color,
+        roughness: 0.5,
+        metalness: 0.1,
+        ...(isFragile && { emissive: new THREE.Color(0xff0066), emissiveIntensity: 0.08 })
+      }));
     }
     return materialCacheRef.current.get(key);
   };
 
   const disposeSharedResources = () => {
-    geometryCacheRef.current.forEach((geometry) => geometry.dispose());
-    edgeCacheRef.current.forEach((edgeGeometry) => edgeGeometry.dispose());
-    materialCacheRef.current.forEach((material) => material.dispose());
+    geometryCacheRef.current.forEach(g => g.dispose());
+    edgeCacheRef.current.forEach(g => g.dispose());
+    materialCacheRef.current.forEach(m => m.dispose());
     lineMaterialRef.current?.dispose();
+    fragilePinkLineRef.current?.dispose();
   };
 
-  const mapSteelcaseBoxToRuntimeType = (exampleId, boxDef, index) => {
-    // Map Steelcase row values (inches + quantity) into the runtime box type format used by addBox().
-    return {
-      id: `${exampleId}-${boxDef.typeId}-${index}`,
-      label: boxDef.label,
-      color: boxDef.color,
-      dimensions: {
-        width: boxDef.dimensionsInches.width / 12,
-        height: boxDef.dimensionsInches.height / 12,
-        depth: boxDef.dimensionsInches.depth / 12
-      },
-      physics: { mass: 20, friction: 0.9, restitution: 0.0 }
-    };
-  };
+  // ── US1 Yash: load-example helpers ────────────────────────────────────────
+  const mapSteelcaseBoxToRuntimeType = (exampleId, boxDef, index) => ({
+    id:         `${exampleId}-${boxDef.typeId}-${index}`,
+    label:      boxDef.label,
+    color:      boxDef.color,
+    dimensions: {
+      width:  boxDef.dimensionsInches.width  / 12,
+      height: boxDef.dimensionsInches.height / 12,
+      depth:  boxDef.dimensionsInches.depth  / 12
+    },
+    physics: { mass: 20, friction: 0.9, restitution: 0.0 },
+    fragile: boxDef.fragile ?? false  // US5
+  });
 
   const buildQueueFromExample = useCallback((example) => {
     const queue = [];
-
     example.boxes.forEach((boxDef, index) => {
-      const runtimeType = mapSteelcaseBoxToRuntimeType(example.id, boxDef, index);
-      for (let i = 0; i < boxDef.quantity; i += 1) {
-        queue.push(runtimeType);
-      }
+      const rt = mapSteelcaseBoxToRuntimeType(example.id, boxDef, index);
+      for (let i = 0; i < boxDef.quantity; i++) queue.push(rt);
     });
-
     return queue;
   }, []);
 
   const buildQueueSummary = useCallback((queue) => {
     const grouped = new Map();
-    queue.forEach((item) => {
-      if (!grouped.has(item.id)) {
-        grouped.set(item.id, { label: item.label, color: item.color, count: 0 });
-      }
+    queue.forEach(item => {
+      if (!grouped.has(item.id)) grouped.set(item.id, { label: item.label, color: item.color, count: 0 });
       grouped.get(item.id).count += 1;
     });
     return Array.from(grouped.values());
@@ -170,275 +213,244 @@ const TruckLoadingPrototype = () => {
   // ── Scene init ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!mountRef.current) return;
-
     const { scene, camera, renderer, dragController, cleanup } = initScene({
-      mountEl:          mountRef.current,
-      cargoRegistry:    cargoRegistryRef.current,
-      physicsEnabledRef,
-      physicsApiRef,
-      setStats,
-      setIsLoading,
-      setIsBoxDragging,
-      saveToHistoryRef
+      mountEl: mountRef.current, cargoRegistry: cargoRegistryRef.current,
+      physicsEnabledRef, physicsApiRef, setStats, setIsLoading, setIsBoxDragging, saveToHistoryRef,
+      onLayoutChanged: () => setLayoutVersion(prev => prev + 1),
+      onOrientPick: (entry, cx, cy) => {
+        setOrientEntry(entry);
+        setOrientWidgetPos({ x: cx, y: cy });
+      }
     });
-
     sceneRef.current          = scene;
     cameraRef.current         = camera;
     rendererRef.current       = renderer;
     dragControllerRef.current = dragController;
-
-    ghostPreviewRef.current = new GhostPreview(scene);
-    fitSystemRef.current    = new FitSuggestionSystem(cargoRegistryRef.current);
-
-    return () => {
-      ghostPreviewRef.current?.hide();
-      cleanup();
-      disposeSharedResources();
-    };
+    ghostPreviewRef.current   = new GhostPreview(scene);
+    return () => { ghostPreviewRef.current?.hide(); cleanup(); disposeSharedResources(); };
   }, []);
 
-  // ── Hide ghost on box type change ─────────────────────────────────────────
+  // US1: auto-select first load example on mount
   useEffect(() => {
-    ghostPreviewRef.current?.hide();
-    setSuggestion(null);
+    if (STEELCASE_LOAD_EXAMPLES.length > 0 && !selectedExampleId)
+      handleLoadExampleSelect(STEELCASE_LOAD_EXAMPLES[0].id);
+  }, []);
+
+  const refreshPlacementSuggestions = useCallback((showNoFitAlert = false) => {
+    if (!selectedBoxType || !ghostPreviewRef.current) {
+      ghostPreviewRef.current?.hide();
+      setSuggestionCandidates([]);
+      setSuggestion(null);
+      return;
+    }
+
+    const size = {
+      x: selectedBoxType.dimensions.width,
+      y: selectedBoxType.dimensions.height,
+      z: selectedBoxType.dimensions.depth
+    };
+    const candidates = getPlacementSuggestions(size, cargoRegistryRef.current, 3);
+    setSuggestionCandidates(candidates);
+    const best = candidates[0] ?? null;
+    setSuggestion(
+      best
+        ? { position: best.position, size: best.size, quaternion: best.quaternion }
+        : null
+    );
+
+    if (best) {
+      ghostPreviewRef.current.show(
+        best.position,
+        best.size,
+        selectedBoxType.color,
+        best.quaternion
+      );
+    } else {
+      ghostPreviewRef.current.hide();
+      if (showNoFitAlert) alert('No valid placement found — the truck may be full!');
+    }
   }, [selectedBoxType]);
 
   useEffect(() => {
-    if (STEELCASE_LOAD_EXAMPLES.length > 0 && !selectedExampleId) {
-      handleLoadExampleSelect(STEELCASE_LOAD_EXAMPLES[0].id);
-    }
-  }, [selectedExampleId]);
+    refreshPlacementSuggestions(false);
+  }, [selectedBoxType, layoutVersion, refreshPlacementSuggestions]);
 
   // ── Camera View ────────────────────────────────────────────────────────────
   const handleCameraView = (view) => {
     if (!cameraRef.current) return;
-
-    const camera = cameraRef.current;
-
-    switch (view) {
-      case 'top':
-        camera.position.set(0, 80, 0.1);
-        break;
-      case 'side':
-        camera.position.set(0, 5, 60);
-        break;
-      case 'back':
-        camera.position.set(-60, 8, 0);
-        break;
-      case 'default':
-      default:
-        camera.position.set(20, 25, 40);
-        break;
-    }
+    const c = cameraRef.current;
+    if      (view === 'top')  c.position.set(0, 80, 0.1);
+    else if (view === 'side') c.position.set(0, 5, 60);
+    else if (view === 'back') c.position.set(-60, 8, 0);
+    else                      c.position.set(20, 25, 40);
   };
 
   // ── Create Physics Body ────────────────────────────────────────────────────
   const createBoxBody = (boxType, boxMesh) => {
     const physicsApi = physicsApiRef.current;
     if (!physicsApi?.world) return null;
-
     const { width, height, depth } = boxType.dimensions;
-    const shape = new CANNON.Box(
-      new CANNON.Vec3(width / 2, height / 2, depth / 2)
-    );
-
     const bodyMaterial = new CANNON.Material(`box-${boxType.id}-${Date.now()}`);
-    const friction    = boxType.physics?.friction ?? 0.9;
-    const restitution = boxType.physics?.restitution ?? 0.0;
-
-    if (physicsApi.materials?.defaultMaterial) {
-      physicsApi.world.addContactMaterial(
-        new CANNON.ContactMaterial(
-          bodyMaterial,
-          physicsApi.materials.defaultMaterial,
-          { friction, restitution }
-        )
-      );
-    }
-
-    if (physicsApi.materials?.wallMaterial) {
-      physicsApi.world.addContactMaterial(
-        new CANNON.ContactMaterial(
-          bodyMaterial,
-          physicsApi.materials.wallMaterial,
-          { friction: Math.max(friction, 0.95), restitution }
-        )
-      );
-    }
-
+    const friction     = boxType.physics?.friction    ?? 0.9;
+    const restitution  = boxType.physics?.restitution ?? 0.0;
+    if (physicsApi.materials?.defaultMaterial)
+      physicsApi.world.addContactMaterial(new CANNON.ContactMaterial(bodyMaterial, physicsApi.materials.defaultMaterial, { friction, restitution }));
+    if (physicsApi.materials?.wallMaterial)
+      physicsApi.world.addContactMaterial(new CANNON.ContactMaterial(bodyMaterial, physicsApi.materials.wallMaterial, { friction: Math.max(friction, 0.95), restitution }));
     const body = new CANNON.Body({
-      mass:            boxType.physics?.mass ?? 20,
-      material:        bodyMaterial,
-      shape,
-      position:        new CANNON.Vec3(boxMesh.position.x, boxMesh.position.y, boxMesh.position.z),
-      angularDamping:  0.98,
-      linearDamping:   0.55,
-      allowSleep:      true,
-      sleepSpeedLimit: 0.08,
-      sleepTimeLimit:  0.5
+      mass: boxType.physics?.mass ?? 20, material: bodyMaterial,
+      shape: new CANNON.Box(new CANNON.Vec3(width / 2, height / 2, depth / 2)),
+      position: new CANNON.Vec3(boxMesh.position.x, boxMesh.position.y, boxMesh.position.z),
+      angularDamping: 0.98, linearDamping: 0.55,
+      allowSleep: true, sleepSpeedLimit: 0.08, sleepTimeLimit: 0.5
     });
-
-    body.quaternion.set(
-      boxMesh.quaternion.x,
-      boxMesh.quaternion.y,
-      boxMesh.quaternion.z,
-      boxMesh.quaternion.w
-    );
-
+    body.quaternion.set(boxMesh.quaternion.x, boxMesh.quaternion.y, boxMesh.quaternion.z, boxMesh.quaternion.w);
     body.fixedRotation = false;
     body.updateMassProperties();
-    body.angularFactor.set(0.08, 1.0, 0.08);
+    // Middle ground: allow tilt/roll without wild spinning (was 1,1,1).
+    body.angularFactor.set(0.45, 1, 0.45);
     body.angularVelocity.set(0, 0, 0);
     body.velocity.set(0, 0, 0);
-
     physicsApi.world.addBody(body);
     return body;
   };
 
-  // ── Drag & Drop CSV Upload Handler ─────────────────────────────────────────
+  // ── Becky: enhanced CSV upload with stop/dimString/isZeroDim/availableQty ─
   const handleCSVUpload = (event) => {
-    event?.preventDefault(); 
+    event?.preventDefault();
     const file = event.dataTransfer ? event.dataTransfer.files[0] : event.target.files[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = e.target.result;
-      
       const lines = text.split(/\r?\n|\r/).map(l => l.trim()).filter(l => l);
-      
-      if (lines.length < 2) {
-        alert("This CSV file is empty! Please upload a file with actual box data.");
-        return;
-      }
-
+      if (lines.length < 2) { alert('This CSV file is empty!'); return; }
       const headers = lines[0].split(',').map(h => h.trim());
-      const lenIdx = headers.indexOf('Length');
-      const widIdx = headers.indexOf('Width');
-      const hgtIdx = headers.indexOf('Height');
+      const lenIdx  = headers.indexOf('Length');
+      const widIdx  = headers.indexOf('Width');
+      const hgtIdx  = headers.indexOf('Height');
+      const qtyIdx  = headers.indexOf('# Pieces');
+      const stopIdx = headers.indexOf('Stop');
       const descIdx = headers.indexOf('Parcel Descript');
-      const qtyIdx = headers.indexOf('# Pieces');
-
       if (lenIdx === -1 || widIdx === -1 || hgtIdx === -1) {
-        alert('Error: This CSV is missing the Length, Width, or Height columns.');
-        return;
+        alert('Error: CSV missing Length, Width, or Height columns.'); return;
       }
-
-      const parsedBoxes = [];
+      const parsedGroups = {};
       const colors = ['#FF6B35', '#004E89', '#1AA37A', '#9B59B6', '#E74C3C', '#F39C12', '#2C3E50'];
-
       for (let i = 1; i < lines.length; i++) {
         try {
-          const cols = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+          const cols     = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
           if (cols.length < Math.max(lenIdx, widIdx, hgtIdx)) continue;
-
-          const l = parseFloat(cols[lenIdx]) || 0;
-          const w = parseFloat(cols[widIdx]) || 0;
-          const h = parseFloat(cols[hgtIdx]) || 0;
-          
-          if (l === 0 && w === 0 && h === 0) continue; 
-
-          const qty = qtyIdx !== -1 ? parseInt(cols[qtyIdx]) || 1 : 1;
-          const desc = descIdx !== -1 ? cols[descIdx].replace(/"/g, '') : `Custom Box ${i}`;
-
-          parsedBoxes.push({
-            id: `csv_box_${i}_${Date.now()}`,
-            dimensions: { width: l / 12, height: h / 12, depth: w / 12 }, 
-            color: colors[i % colors.length],
-            label: `${desc} (${l}″×${w}″×${h}″) - Qty: ${qty}`,
-            availableQty: qty,
-            physics: { mass: 20, friction: 0.9, restitution: 0.0 }
-          });
-        } catch (err) {
-          console.warn(`Skipped malformed row ${i}:`, lines[i]);
-        }
+          const l        = parseFloat(cols[lenIdx]) || 0;
+          const w        = parseFloat(cols[widIdx])  || 0;
+          const h        = parseFloat(cols[hgtIdx])  || 0;
+          const isZeroDim = l === 0 && w === 0 && h === 0;
+          const qty      = qtyIdx  !== -1 ? parseInt(cols[qtyIdx])  || 1 : 1;
+          const stopVal  = stopIdx !== -1 && cols[stopIdx] ? cols[stopIdx].replace(/"/g, '').trim() : 'Unassigned';
+          const dimString = isZeroDim ? `0″ × 0″ × 0″` : `${l}″ × ${w}″ × ${h}″`;
+          const groupKey  = `${stopVal}_${dimString}`;
+          if (!parsedGroups[groupKey]) {
+            parsedGroups[groupKey] = {
+              id:           `csv_${groupKey.replace(/[^a-zA-Z0-9]/g, '_')}`,
+              dimensions:   { width: l / 12, height: h / 12, depth: w / 12 },
+              color:        isZeroDim ? '#ced4da' : colors[Object.keys(parsedGroups).length % colors.length],
+              label:        `Package: ${dimString}`,
+              dimString,
+              isZeroDim,
+              availableQty: 0,
+              stop:         stopVal,
+              physics:      { mass: 20, friction: 0.9, restitution: 0.0 },
+              fragile:      false
+            };
+          }
+          parsedGroups[groupKey].availableQty += qty;
+        } catch (err) { console.warn(`Skipped row ${i}:`, lines[i]); }
       }
-
+      const parsedBoxes = Object.values(parsedGroups);
       if (parsedBoxes.length > 0) {
         setSelectedExampleName('Manual CSV');
         setSelectedExampleId(null);
         setBoxQueue([]);
         setQueueSummary([]);
         setAvailableBoxes(parsedBoxes);
-        setSelectedBoxType(parsedBoxes[0]);
-      } else {
-        alert("No valid box dimensions found in this CSV. All rows were 0x0x0.");
-      }
+        setSelectedBoxType(null);
+        setActiveStopFilter(null);
+      } else { alert('No valid box dimensions found in this CSV.'); }
     };
-    
     reader.readAsText(file);
-    if(event.target.value) event.target.value = null; 
+    if (event.target?.value) event.target.value = null;
   };
 
-  // ── Add Box ────────────────────────────────────────────────────────────────
-  const addBoxFromType = (boxType) => {
-    if (!sceneRef.current) return;
+  // ── US5 Rhea: check if a newly-placed heavy box sits on a fragile one ─────
+  const checkFragileStacking = useCallback((newEntry) => {
+    const isHeavy = (newEntry.physics?.mass ?? 0) >= HEAVY_BOX_MASS_THRESHOLD;
+    if (!isHeavy) return;
+    const newBottom = newEntry.mesh.position.y - newEntry.size.y / 2;
+    const eps = 0.15;
+    for (const other of cargoRegistryRef.current) {
+      if (other === newEntry || !(other.fragile ?? false)) continue;
+      const otherTop = other.mesh.position.y + other.size.y / 2;
+      if (Math.abs(newBottom - otherTop) > eps) continue;
+      const dx = Math.abs(newEntry.mesh.position.x - other.mesh.position.x);
+      const dz = Math.abs(newEntry.mesh.position.z - other.mesh.position.z);
+      if (dx < (newEntry.size.x / 2 + other.size.x / 2) - 0.05 &&
+          dz < (newEntry.size.z / 2 + other.size.z / 2) - 0.05) {
+        const cfg = availableBoxes.find(c => c.id === other.type) || BOX_CONFIGS.find(c => c.id === other.type);
+        setFragileWarning(`⚠️ Heavy box (${newEntry.physics.mass} lbs) placed on FRAGILE box "${cfg?.label ?? other.label}"! Move it to avoid damage.`);
+        return;
+      }
+    }
+  }, [availableBoxes]);
 
+  // ── US6 Yash + US5 Rhea: core box spawner ─────────────────────────────────
+  const addBoxFromType = useCallback((boxType) => {
+    if (!sceneRef.current || !boxType) return false;
     if (cargoRegistryRef.current.length >= MAX_BOXES) {
-      alert(`Maximum ${MAX_BOXES} boxes reached for performance`);
-      return false;
+      alert(`Maximum ${MAX_BOXES} boxes reached`); return false;
     }
+    const isFragile      = boxType.fragile ?? false;
+    const boxGeometry    = getSharedGeometry(boxType.dimensions);
+    const boxMaterial    = getSharedMaterial(boxType);
+    const box            = new THREE.Mesh(boxGeometry, boxMaterial);
+    const currentCount   = cargoRegistryRef.current.length;
 
-    const boxGeometry = getSharedGeometry(boxType.dimensions);
-    const boxMaterial = getSharedMaterial(boxType);
-    const box = new THREE.Mesh(boxGeometry, boxMaterial);
-    const currentCount = cargoRegistryRef.current.length;
-
-    // Truck deck inner usable area (must stay inside physics floor; leave margin from walls).
+    // Wide-grid spawn (US6)
     const halfLen = TRUCK_DIMENSIONS.length / 2;
-    const halfW = TRUCK_DIMENSIONS.width / 2;
-    const marginX = 3.2;
-    const marginZ = 0.85;
+    const halfW   = TRUCK_DIMENSIONS.width  / 2;
+    const marginX = 3.2, marginZ = 0.85;
     const usableX = TRUCK_DIMENSIONS.length - marginX * 2;
-    const usableZ = TRUCK_DIMENSIONS.width - marginZ * 2;
+    const usableZ = TRUCK_DIMENSIONS.width  - marginZ * 2;
+    const COLS_X  = 9, ROWS_Z = 3;
+    const layer   = Math.floor(currentCount / (COLS_X * ROWS_Z));
+    const slotIdx = currentCount % (COLS_X * ROWS_Z);
+    const col     = slotIdx % COLS_X;
+    const row     = Math.floor(slotIdx / COLS_X);
+    const spawnX  = -halfLen + marginX + (col + 0.5) * (usableX / COLS_X) + layer * 0.35;
+    const spawnZ  = -halfW   + marginZ + (row + 0.5) * (usableZ / ROWS_Z);
 
-    // Wide grid: spacing must exceed largest SKU footprint (Steelcase furniture ~2.5 ft).
-    const COLS_X = 9;
-    const ROWS_Z = 3;
-    const cellX = usableX / COLS_X;
-    const cellZ = usableZ / ROWS_Z;
-    const slotsPerLayer = COLS_X * ROWS_Z;
-    const layer = Math.floor(currentCount / slotsPerLayer);
-    const slotIdx = currentCount % slotsPerLayer;
-    const col = slotIdx % COLS_X;
-    const row = Math.floor(slotIdx / COLS_X);
+    // Lay long-thin parcels flat
+    const isLongAndThin = boxType.dimensions.height > 2.5 && Math.min(boxType.dimensions.width, boxType.dimensions.depth) < 1.0;
+    if (isLongAndThin) box.quaternion.setFromEuler(new THREE.Euler(0, 0, Math.PI / 2));
 
-    const spawnX = -halfLen + marginX + (col + 0.5) * cellX + layer * 0.35;
-    const spawnZ = -halfW + marginZ + (row + 0.5) * cellZ;
-
-    // Cannon truck floor top ~0.2; align mesh bottom after orientation via world AABB.
-    const FLOOR_TOP = 0.22;
-
-    // Long-and-thin items are laid flat by default so they don't appear like vertical poles.
-    const isLongAndThin =
-      boxType.dimensions.height > 2.5 &&
-      Math.min(boxType.dimensions.width, boxType.dimensions.depth) < 1.0;
-
-    if (isLongAndThin) {
-      box.quaternion.setFromEuler(new THREE.Euler(0, 0, Math.PI / 2));
-    }
     box.position.set(spawnX, 8, spawnZ);
     box.updateMatrixWorld(true);
     const bbox = new THREE.Box3().setFromObject(box);
-    box.position.y += FLOOR_TOP - bbox.min.y;
-    // Second+ layers: slight vertical offset so 28+ boxes don't share exact coordinates.
-    if (layer > 0) {
-      box.position.y += layer * 1.15;
-    }
+    box.position.y += 0.22 - bbox.min.y;
+    if (layer > 0) box.position.y += layer * 1.15;
     box.updateMatrixWorld(true);
 
-    box.castShadow = currentCount < 30;
+    box.castShadow    = currentCount < 30; // US6: skip distant shadow casters
     box.receiveShadow = true;
 
-    box.add(
-      new THREE.LineSegments(
-        getSharedEdges(boxType.dimensions),
-        lineMaterialRef.current
-      )
-    );
+    // US5: pink edge lines for fragile boxes
+    box.add(new THREE.LineSegments(
+      getSharedEdges(boxType.dimensions),
+      isFragile ? fragilePinkLineRef.current : lineMaterialRef.current
+    ));
+    // US5: floating FRAGILE sprite
+    if (isFragile) box.add(createFragileLabel(boxType.dimensions.height));
 
     sceneRef.current.add(box);
-
     const body = createBoxBody(boxType, box);
 
     const entry = {
@@ -447,47 +459,34 @@ const TruckLoadingPrototype = () => {
       label:        boxType.label,
       mesh:         box,
       body,
-      size: {
-        x: boxType.dimensions.width,
-        y: boxType.dimensions.height,
-        z: boxType.dimensions.depth
-      },
+      size:         { x: boxType.dimensions.width, y: boxType.dimensions.height, z: boxType.dimensions.depth },
       dimensions:   { ...boxType.dimensions },
       physics:      { ...boxType.physics },
+      fragile:      isFragile,   // US5
       baseMaterial: boxMaterial
     };
 
     cargoRegistryRef.current.push(entry);
+    setBoxes(prev => [...prev, { id: entry.id, mesh: box, type: boxType.id }]);
+    setStats(prev => ({ ...prev, boxCount: prev.boxCount + 1 }));
+    setLayoutVersion(prev => prev + 1);
 
-    setBoxes((prev) => [
-      ...prev,
-      { id: entry.id, mesh: box, type: boxType.id }
-    ]);
-
-    setStats((prev) => ({ ...prev, boxCount: prev.boxCount + 1 }));
-
-    ghostPreviewRef.current?.hide();
-    setSuggestion(null);
+    // US5: check stacking after state settles
+    setTimeout(() => checkFragileStacking(entry), 100);
     return true;
-  };
+  }, [checkFragileStacking]);
 
-  const addBox = () => {
+  const addBox = useCallback(() => {
     addBoxFromType(selectedBoxType);
-  };
+  }, [selectedBoxType, addBoxFromType]);
 
   // ── Export Load Plan ───────────────────────────────────────────────────────
   const exportLoadPlan = () => {
     const boxesPayload = cargoRegistryRef.current.map((entry, index) => {
-      const volume =
-        entry.dimensions.width *
-        entry.dimensions.height *
-        entry.dimensions.depth;
-
+      const volume = entry.dimensions.width * entry.dimensions.height * entry.dimensions.depth;
       return {
-        index: index + 1,
-        id:    entry.id,
-        type:  entry.type,
-        label: entry.label,
+        index: index + 1, id: entry.id, type: entry.type, label: entry.label,
+        fragile: entry.fragile ?? false,  // US5
         dimensions: {
           width:  Number(entry.dimensions.width.toFixed(3)),
           height: Number(entry.dimensions.height.toFixed(3)),
@@ -506,293 +505,236 @@ const TruckLoadingPrototype = () => {
         volumeFt3: Number(volume.toFixed(3))
       };
     });
-
     const payload = {
       generatedAt: new Date().toISOString(),
-      truck: {
-        ...TRUCK_DIMENSIONS,
-        totalVolumeFt3: Number(TRUCK_VOLUME.toFixed(3))
-      },
+      truck: { ...TRUCK_DIMENSIONS, totalVolumeFt3: Number(TRUCK_VOLUME.toFixed(3)) },
       summary: {
-        totalBoxes:         boxesPayload.length,
+        totalBoxes: boxesPayload.length,
         totalVolumeUsedFt3: Number(usedVolume.toFixed(3)),
         utilizationPercent: Number(volumePercentage)
       },
       boxes: boxesPayload
     };
-
-    const blob = new Blob([JSON.stringify(payload, null, 2)], {
-      type: 'application/json'
-    });
-
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href     = url;
-    link.download = 'load-plan.json';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    link.href = url; link.download = 'load-plan.json';
+    document.body.appendChild(link); link.click();
+    document.body.removeChild(link); URL.revokeObjectURL(url);
   };
 
   // ── Clear Boxes ────────────────────────────────────────────────────────────
-  const clearBoxes = ({ clearQueue = true } = {}) => {
+  const clearBoxes = useCallback(({ clearQueue = true } = {}) => {
     const physicsWorld = physicsApiRef.current?.world;
-
-    // Use registry ref (not React `boxes` state) so clears always match spawned meshes,
-    // including when handlers are called from stale closures.
-    const toRemove = [...cargoRegistryRef.current];
-    toRemove.forEach((registryEntry) => {
-      if (registryEntry?.body && physicsWorld) {
-        physicsWorld.removeBody(registryEntry.body);
-      }
-      if (sceneRef.current && registryEntry?.mesh) {
-        sceneRef.current.remove(registryEntry.mesh);
-      }
-      registryEntry.mesh?.clear();
+    [...cargoRegistryRef.current].forEach(e => {
+      if (e?.body && physicsWorld) physicsWorld.removeBody(e.body);
+      if (sceneRef.current && e?.mesh) sceneRef.current.remove(e.mesh);
+      e.mesh?.clear();
     });
-
     cargoRegistryRef.current.length = 0;
     dragControllerRef.current?.clearRegistry();
     ghostPreviewRef.current?.hide();
     setSuggestion(null);
+    setSuggestionCandidates([]);
     setBoxes([]);
-    setStats((prev) => ({ ...prev, boxCount: 0 }));
+    setStats(prev => ({ ...prev, boxCount: 0 }));
+    setFragileWarning(null);
+    setOrientEntry(null);
+    setLayoutVersion(prev => prev + 1);
     if (clearQueue) {
-      setBoxQueue([]);
-      setQueueSummary([]);
-      setSelectedExampleName('Manual');
-      setSelectedExampleId(null);
+      setBoxQueue([]); setQueueSummary([]);
+      setSelectedExampleName('Manual'); setSelectedExampleId(null);
     }
     clearHistory();
-  };
+  }, [clearHistory]);
 
-  const handleLoadExampleSelect = useCallback(
-    (exampleId) => {
-      const selectedExample = STEELCASE_LOAD_EXAMPLES.find((example) => example.id === exampleId);
-      if (!selectedExample) return;
+  // ── US1 Yash: load example select ─────────────────────────────────────────
+  const handleLoadExampleSelect = useCallback((exampleId) => {
+    const example = STEELCASE_LOAD_EXAMPLES.find(e => e.id === exampleId);
+    if (!example) return;
+    clearBoxes({ clearQueue: false });
+    const queued       = buildQueueFromExample(example);
+    const runtimeTypes = example.boxes.map((boxDef, i) => mapSteelcaseBoxToRuntimeType(example.id, boxDef, i));
+    setSelectedExampleName(example.name);
+    setSelectedExampleId(example.id);
+    setAvailableBoxes(runtimeTypes);
+    setSelectedBoxType(runtimeTypes[0]);
+    setBoxQueue(queued);
+    setQueueSummary(buildQueueSummary(queued));
+    setActiveStopFilter(null);
+  }, [buildQueueFromExample, buildQueueSummary, clearBoxes]);
 
-      clearBoxes({ clearQueue: false });
-
-      const queued = buildQueueFromExample(selectedExample);
-      const runtimeTypes = selectedExample.boxes.map((boxDef, index) =>
-        mapSteelcaseBoxToRuntimeType(selectedExample.id, boxDef, index)
-      );
-
-      setSelectedExampleName(selectedExample.name);
-      setSelectedExampleId(selectedExample.id);
-      setAvailableBoxes(runtimeTypes);
-      setSelectedBoxType(runtimeTypes[0]);
-      setBoxQueue(queued);
-      setQueueSummary(buildQueueSummary(queued));
-    },
-    [buildQueueFromExample, buildQueueSummary]
-  );
-
+  // ── US1 Yash: add next queued box ─────────────────────────────────────────
   const addNextQueuedBox = useCallback(() => {
-    if (boxQueue.length === 0) {
-      addBox();
-      return;
-    }
-
+    if (boxQueue.length === 0) { addBox(); return; }
     const nextType = boxQueue[0];
-    const didAdd = addBoxFromType(nextType);
-
-    if (didAdd) {
-      setBoxQueue((prev) => {
+    if (addBoxFromType(nextType)) {
+      setBoxQueue(prev => {
         const updated = prev.slice(1);
         setQueueSummary(buildQueueSummary(updated));
-        if (updated.length > 0) {
-          setSelectedBoxType(updated[0]);
-        }
+        if (updated.length > 0) setSelectedBoxType(updated[0]);
         return updated;
       });
     }
-  }, [boxQueue, buildQueueSummary]);
+  }, [boxQueue, addBox, addBoxFromType, buildQueueSummary]);
 
+  // ── US6 Yash: stress test ──────────────────────────────────────────────────
   const runStressTest = useCallback(() => {
     if (isStressTestRunning) return;
-
-    setIsStressTestRunning(true);
-    setStressResult(null);
+    setIsStressTestRunning(true); setStressResult(null);
     clearBoxes({ clearQueue: false });
-
     const sourceTypes = boxQueue.length > 0 ? [...boxQueue] : [...availableBoxes];
-    if (sourceTypes.length === 0) {
-      setIsStressTestRunning(false);
-      return;
-    }
-
+    if (!sourceTypes.length) { setIsStressTestRunning(false); return; }
     let i = 0;
     const startFpsSampling = () => {
-      const samples = [];
-      const start = performance.now();
-      const sampleInterval = window.setInterval(() => {
+      const samples = []; const start = performance.now();
+      const iv = window.setInterval(() => {
         samples.push(statsRef.current.fps);
         if (performance.now() - start >= 5000) {
-          window.clearInterval(sampleInterval);
-          const avgFps = Math.round(
-            samples.reduce((sum, fps) => sum + fps, 0) / Math.max(samples.length, 1)
-          );
+          window.clearInterval(iv);
+          const avgFps = Math.round(samples.reduce((s, f) => s + f, 0) / Math.max(samples.length, 1));
           const minFps = samples.length ? Math.min(...samples) : 0;
-
-          setStressResult({
-            boxCount: STRESS_TEST_TARGET,
-            avgFps,
-            minFps,
-            passed: avgFps >= 30 && minFps >= 30
-          });
+          setStressResult({ boxCount: STRESS_TEST_TARGET, avgFps, minFps, passed: avgFps >= 30 && minFps >= 30 });
           setIsStressTestRunning(false);
         }
       }, 500);
     };
-
     const spawnStep = () => {
-      if (i < STRESS_TEST_TARGET) {
-        addBoxFromType(sourceTypes[i % sourceTypes.length]);
-        i += 1;
-        requestAnimationFrame(spawnStep);
-      } else {
-        startFpsSampling();
-      }
+      if (i < STRESS_TEST_TARGET) { addBoxFromType(sourceTypes[i % sourceTypes.length]); i++; requestAnimationFrame(spawnStep); }
+      else startFpsSampling();
     };
     requestAnimationFrame(spawnStep);
-  }, [availableBoxes, boxQueue, isStressTestRunning]);
+  }, [availableBoxes, boxQueue, isStressTestRunning, addBoxFromType, clearBoxes]);
 
-  // ── Suggest Placement ─────────────────────────────────────────────────────
+  const computeSessionSummaryMetrics = useCallback(() => {
+    const entries = cargoRegistryRef.current;
+    if (!entries.length) return null;
+
+    const cargoVolume = entries.reduce(
+      (total, e) => total + (e.dimensions.width * e.dimensions.height * e.dimensions.depth),
+      0
+    );
+    const optimalSpaceUsedPct = (cargoVolume / TRUCK_VOLUME) * 100;
+
+    const minX = Math.min(...entries.map(e => e.mesh.position.x - e.size.x / 2));
+    const maxX = Math.max(...entries.map(e => e.mesh.position.x + e.size.x / 2));
+    const minY = Math.min(...entries.map(e => e.mesh.position.y - e.size.y / 2));
+    const maxY = Math.max(...entries.map(e => e.mesh.position.y + e.size.y / 2));
+    const minZ = Math.min(...entries.map(e => e.mesh.position.z - e.size.z / 2));
+    const maxZ = Math.max(...entries.map(e => e.mesh.position.z + e.size.z / 2));
+
+    const arrangementVolume = Math.max(0, (maxX - minX) * (maxY - minY) * (maxZ - minZ));
+    const userSpaceUsedPct = Math.min(100, (arrangementVolume / TRUCK_VOLUME) * 100);
+    const wastedSpacePct = Math.max(0, ((arrangementVolume - cargoVolume) / TRUCK_VOLUME) * 100);
+    const efficiencyDeltaPct = optimalSpaceUsedPct - userSpaceUsedPct;
+
+    return {
+      totalBoxes: entries.length,
+      optimalSpaceUsedPct,
+      userSpaceUsedPct,
+      wastedSpacePct,
+      efficiencyDeltaPct
+    };
+  }, []);
+
+  const handleFinishSession = useCallback(() => {
+    const metrics = computeSessionSummaryMetrics();
+    if (!metrics) return;
+    setSessionSummaryMetrics(metrics);
+    setShowSessionSummary(true);
+  }, [computeSessionSummaryMetrics]);
+
+  // ── AI Best Fit ────────────────────────────────────────────────────────────
   const handleSuggestPlacement = useCallback(() => {
-    if (!fitSystemRef.current || !ghostPreviewRef.current || !sceneRef.current) return;
-
+    if (!selectedBoxType) return;
     setIsCalcSuggestion(true);
-    ghostPreviewRef.current.hide();
-    setSuggestion(null);
-
     setTimeout(() => {
-      const size = {
-        x: selectedBoxType.dimensions.width,
-        y: selectedBoxType.dimensions.height,
-        z: selectedBoxType.dimensions.depth
-      };
-
-      const pos = fitSystemRef.current.findBestFit(size);
-
-      if (pos) {
-        ghostPreviewRef.current.show(pos, size, selectedBoxType.color);
-        setSuggestion({ position: pos, size });
-      } else {
-        setSuggestion(null);
-        alert('No valid placement found — the truck may be full!');
-      }
-
+      refreshPlacementSuggestions(true);
       setIsCalcSuggestion(false);
     }, 30);
-  }, [selectedBoxType]);
+  }, [selectedBoxType, refreshPlacementSuggestions]);
 
-  // ── Snap to Suggestion ────────────────────────────────────────────────────
   const handleSnapToSuggestion = useCallback(() => {
     if (!suggestion || boxes.length === 0) return;
-
     const lastEntry = cargoRegistryRef.current[cargoRegistryRef.current.length - 1];
     if (!lastEntry) return;
-
     const oldPos = lastEntry.mesh.position.clone();
     lastEntry.mesh.position.copy(suggestion.position);
-    lastEntry.size.x = suggestion.size.x;
-    lastEntry.size.y = suggestion.size.y;
-    lastEntry.size.z = suggestion.size.z;
-
+    if (suggestion.quaternion) lastEntry.mesh.quaternion.copy(suggestion.quaternion);
+    lastEntry.size.x = suggestion.size.x; lastEntry.size.y = suggestion.size.y; lastEntry.size.z = suggestion.size.z;
     if (lastEntry.body) {
-      lastEntry.body.position.set(
-        suggestion.position.x,
-        suggestion.position.y,
-        suggestion.position.z
+      lastEntry.body.position.set(suggestion.position.x, suggestion.position.y, suggestion.position.z);
+      lastEntry.body.quaternion.set(
+        lastEntry.mesh.quaternion.x,
+        lastEntry.mesh.quaternion.y,
+        lastEntry.mesh.quaternion.z,
+        lastEntry.mesh.quaternion.w
       );
-      lastEntry.body.velocity.set(0, 0, 0);
-      lastEntry.body.angularVelocity.set(0, 0, 0);
-      lastEntry.body.wakeUp();
+      lastEntry.body.velocity.set(0, 0, 0); lastEntry.body.angularVelocity.set(0, 0, 0); lastEntry.body.wakeUp();
     }
-
     saveToHistoryRef.current?.(lastEntry.mesh, oldPos, suggestion.position);
+    setLayoutVersion(prev => prev + 1);
+    setTimeout(() => checkFragileStacking(lastEntry), 100);
+  }, [suggestion, boxes.length, checkFragileStacking]);
 
-    ghostPreviewRef.current?.hide();
-    setSuggestion(null);
-  }, [suggestion, boxes.length]);
+  const handleUndo = useCallback(() => {
+    undo();
+    setTimeout(() => setLayoutVersion(prev => prev + 1), 0);
+  }, [undo]);
+
+  const handleRedo = useCallback(() => {
+    redo();
+    setTimeout(() => setLayoutVersion(prev => prev + 1), 0);
+  }, [redo]);
+
+  const handleRotateBox = useCallback(() => {
+    const dc = dragControllerRef.current;
+    if (!dc) return;
+    if (orientEntry) dc.rotateEntry(orientEntry);
+    else dc.rotateSelected();
+  }, [orientEntry]);
+
+  const syncOrientPhysics = useCallback((entry) => {
+    dragControllerRef.current?.syncBodyWithMesh(entry);
+    setLayoutVersion(prev => prev + 1);
+  }, []);
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div
-      style={{
-        width: '100vw',
-        height: '100vh',
-        margin: 0,
-        padding: 0,
-        overflow: 'hidden',
-        fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        background: '#ffffff'
-      }}
-    >
+    <div style={{
+      width: '100vw', height: '100vh', margin: 0, padding: 0, overflow: 'hidden',
+      fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      background: '#ffffff'
+    }}>
       <Header
-        stats={stats}
-        usedVolume={usedVolume}
-        volumePercentage={volumePercentage}
-        isBoxDragging={isBoxDragging}
-        historyIndex={historyIndex}
-        history={history}
-        undo={undo}
-        redo={redo}
-        selectedExampleName={selectedExampleName}
-        stressResult={stressResult}
+        stats={stats} usedVolume={usedVolume} volumePercentage={volumePercentage}
+        isBoxDragging={isBoxDragging} historyIndex={historyIndex} history={history}
+        undo={undo} redo={redo} selectedExampleName={selectedExampleName} stressResult={stressResult}
       />
 
       {/* 3D Canvas */}
-      <div
-        ref={mountRef}
-        style={{
-          width: '100%',
-          height: '100%',
-          position: 'absolute',
-          top: 0,
-          left: 0
-        }}
-      />
+      <div ref={mountRef} style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }} />
 
+      {/* Loading overlay */}
       {isLoading && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: '#ffffff',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 100
-          }}
-        >
+        <div style={{ position: 'absolute', inset: 0, background: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
           <div style={{ textAlign: 'center' }}>
-            <div
-              style={{
-                width: '40px',
-                height: '40px',
-                border: '3px solid #e0e0e0',
-                borderTop: '3px solid #004E89',
-                borderRadius: '50%',
-                animation: 'spin 1s linear infinite',
-                margin: '0 auto 16px'
-              }}
-            />
-            <p style={{ color: '#666', fontSize: '14px' }}>
-              Loading 3D Environment...
-            </p>
+            <div style={{ width: '40px', height: '40px', border: '3px solid #e0e0e0', borderTop: '3px solid #004E89', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 16px' }} />
+            <p style={{ color: '#666', fontSize: '14px' }}>Loading 3D Environment...</p>
           </div>
         </div>
       )}
 
+      {/* Becky: Shipment Summary panel */}
+      <ShipmentSummary
+        availableBoxes={availableBoxes}
+        activeStopFilter={activeStopFilter}
+        setActiveStopFilter={setActiveStopFilter}
+      />
+
       <ControlPanel
         boxes={boxes}
-        availableBoxes={availableBoxes}
+        availableBoxes={filteredBoxes}
         selectedBoxType={selectedBoxType}
         setSelectedBoxType={setSelectedBoxType}
         addBox={addBox}
@@ -800,9 +742,11 @@ const TruckLoadingPrototype = () => {
         exportLoadPlan={exportLoadPlan}
         historyIndex={historyIndex}
         history={history}
-        undo={undo}
-        redo={redo}
+        undo={handleUndo}
+        redo={handleRedo}
         isBoxDragging={isBoxDragging}
+        orientEntry={orientEntry}
+        onRotateBox={handleRotateBox}
         dragControllerRef={dragControllerRef}
         handleCameraView={handleCameraView}
         handleCSVUpload={handleCSVUpload}
@@ -820,18 +764,57 @@ const TruckLoadingPrototype = () => {
         onSnapToSuggestion={handleSnapToSuggestion}
         hasSuggestion={!!suggestion}
         isCalcSuggestion={isCalcSuggestion}
+        suggestionCount={suggestionCandidates.length}
+        activeStopFilter={activeStopFilter}
+        setActiveStopFilter={setActiveStopFilter}
+        onFinishSession={handleFinishSession}
       />
+
+      {orientEntry && (
+        <OrientationWidget
+          selectedBox={orientEntry}
+          widgetPos={orientWidgetPos}
+          dragControllerRef={dragControllerRef}
+          setSelectedBox={setOrientEntry}
+          onPhysicsSync={syncOrientPhysics}
+        />
+      )}
 
       <ControlsGuide />
 
+      {/* US5 Rhea: fragile stacking warning toast */}
+      {fragileWarning && (
+        <div style={{
+          position: 'absolute', bottom: '32px', left: '50%', transform: 'translateX(-50%)',
+          background: 'linear-gradient(135deg, #e74c3c, #c0392b)', color: '#fff',
+          borderRadius: '12px', padding: '14px 24px', fontSize: '14px', fontWeight: 700,
+          boxShadow: '0 6px 24px rgba(231,76,60,0.45)', zIndex: 50,
+          maxWidth: '520px', textAlign: 'center', animation: 'toastSlideUp 0.3s ease'
+        }}>
+          {fragileWarning}
+          <button onClick={() => setFragileWarning(null)} style={{
+            marginLeft: '16px', background: 'rgba(255,255,255,0.25)', border: 'none',
+            borderRadius: '6px', color: '#fff', padding: '2px 10px', cursor: 'pointer',
+            fontSize: '13px', fontWeight: 700
+          }}>✕</button>
+        </div>
+      )}
+
+      <SessionSummaryModal
+        open={showSessionSummary}
+        metrics={sessionSummaryMetrics}
+        onClose={() => setShowSessionSummary(false)}
+      />
+
       <style>{`
-        @keyframes spin {
-          0%   { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
+        @keyframes spin { 0% { transform:rotate(0deg) } 100% { transform:rotate(360deg) } }
         @keyframes pulse-suggest {
-          0%, 100% { box-shadow: 0 0 0 0 rgba(26,163,122,0.5); }
-          50%       { box-shadow: 0 0 0 6px rgba(26,163,122,0); }
+          0%,100% { box-shadow:0 0 0 0 rgba(26,163,122,0.5) }
+          50%      { box-shadow:0 0 0 6px rgba(26,163,122,0) }
+        }
+        @keyframes toastSlideUp {
+          from { transform:translateX(-50%) translateY(20px); opacity:0 }
+          to   { transform:translateX(-50%) translateY(0);    opacity:1 }
         }
       `}</style>
     </div>

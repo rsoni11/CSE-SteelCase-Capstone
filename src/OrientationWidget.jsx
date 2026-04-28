@@ -8,7 +8,13 @@ const btnStyle = (color) => ({
   fontSize: '12px', fontWeight: 600, cursor: 'pointer'
 });
 
-const OrientationWidget = ({ selectedBox, widgetPos, dragControllerRef, setSelectedBox }) => {
+const OrientationWidget = ({
+  selectedBox,
+  widgetPos,
+  dragControllerRef,
+  setSelectedBox,
+  onPhysicsSync
+}) => {
   if (!selectedBox) return null;
 
   const rotateBox = (axis, dir = 1) => {
@@ -32,6 +38,9 @@ const OrientationWidget = ({ selectedBox, widgetPos, dragControllerRef, setSelec
     mesh.position.x = THREE.MathUtils.clamp(mesh.position.x, -halfL + size.x / 2, halfL - size.x / 2);
     mesh.position.z = THREE.MathUtils.clamp(mesh.position.z, -halfW + size.z / 2, halfW - size.z / 2);
     mesh.position.y = Math.max(mesh.position.y, 0.1 + size.y / 2);
+
+    mesh.updateMatrixWorld(true);
+    onPhysicsSync?.(selectedBox);
   };
 
   const handleDone = () => {
@@ -53,7 +62,7 @@ const OrientationWidget = ({ selectedBox, widgetPos, dragControllerRef, setSelec
         <div style={{ fontSize: '13px', fontWeight: 700, color: '#1a1a1a', marginBottom: '2px' }}>
           🔄 Orientation
         </div>
-        <div style={{ fontSize: '11px', color: '#999' }}>Double-clicked box</div>
+        <div style={{ fontSize: '11px', color: '#999' }}>Opened with double-click on the box</div>
       </div>
 
       <div style={{ marginBottom: '10px' }}>
