@@ -29,6 +29,7 @@ const ControlPanel = ({
   queueCount,
   queueSummary,
   addNextQueuedBox,
+  sortQueueForPacking,
   // US6 Yash
   runStressTest,
   isStressTestRunning,
@@ -39,6 +40,7 @@ const ControlPanel = ({
   hasSuggestion,
   isCalcSuggestion,
   suggestionCount = 0,
+  suggestionReasons = [],
   activeStopFilter,
   setActiveStopFilter,
   onFinishSession,
@@ -249,6 +251,19 @@ const ControlPanel = ({
                       : ((selectedBoxType?.fragile ? '⚠ Add Fragile Box' : 'Add Box'))))}
           </button>
 
+          {/* Load order — heaviest to the deck first, fragile on top */}
+          {(queueCount ?? 0) > 1 && sortQueueForPacking && (
+            <button
+              type="button"
+              onClick={sortQueueForPacking}
+              title="Reorder the remaining queue: heaviest and bulkiest first, fragile last"
+              style={{ ...btnBase, background: '#ffffff', color: '#004E89',
+                border: '2px solid #004E89', cursor: 'pointer' }}
+            >
+              ⚖ Sort Queue by Weight
+            </button>
+          )}
+
           {/* ── US6 Yash: Stress Test ────────────────────────────────────── */}
           <button onClick={runStressTest} disabled={isStressTestRunning}
             style={{ ...btnBase, background: '#2C3E50', color: '#ffffff', border: 'none',
@@ -293,6 +308,24 @@ const ControlPanel = ({
                 ? `● Ghost preview visible in truck (${suggestionCount} ranked suggestion${suggestionCount === 1 ? '' : 's'})`
                 : 'No valid recommendation for current box'}
             </div>
+
+            {/* Why this spot — makes the ranking auditable instead of a black box */}
+            {hasSuggestion && suggestionReasons.length > 0 && (
+              <div style={{ marginTop: '8px', background: '#ffffff', border: '1px solid #cbe8dc',
+                borderRadius: '8px', padding: '8px 10px' }}>
+                <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.5px',
+                  color: '#13815f', textTransform: 'uppercase', marginBottom: '4px' }}>
+                  Why this spot
+                </div>
+                {suggestionReasons.map((reason) => (
+                  <div key={reason} style={{ display: 'flex', gap: '6px', fontSize: '11px',
+                    color: reason.startsWith('Warning') ? '#c0392b' : '#495057', lineHeight: 1.5 }}>
+                    <span aria-hidden="true">{reason.startsWith('Warning') ? '⚠' : '✓'}</span>
+                    <span>{reason}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {selectedGroupCount > 0 && (

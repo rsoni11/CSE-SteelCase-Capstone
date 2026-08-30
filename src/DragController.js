@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { TRUCK_DIMENSIONS } from './constants';
+import { TRUCK_DIMENSIONS, DECK_SURFACE_Y } from './constants';
 
-const FLOOR_CONTACT_Y = 0.1;
+// The deck's top face — cargo rests here, not at 0.1 (the slab's centre).
+const FLOOR_CONTACT_Y = DECK_SURFACE_Y;
 
 const GROUP_COLOR     = new THREE.Color(0x667eea);
 const HIGHLIGHT_COLOR = new THREE.Color(0x4aa3ff);
@@ -93,7 +94,7 @@ export class DragController {
 
   clampY(y) {
     const size = this.selectedEntry?.size || { y: 0 };
-    const minY = 0.1 + size.y / 2;
+    const minY = FLOOR_CONTACT_Y + size.y / 2;
     const maxY = TRUCK_DIMENSIONS.height - size.y / 2;
     return Math.round(THREE.MathUtils.clamp(y, minY, maxY) / 0.05) * 0.05;
   }

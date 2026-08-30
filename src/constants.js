@@ -46,6 +46,16 @@ export const BOX_CONFIGS = [
 // US5: boxes at or above this mass are "heavy" for fragile-stacking warnings
 export const HEAVY_BOX_MASS_THRESHOLD = 25;
 
+/**
+ * Top surface of the trailer deck, in feet.
+ *
+ * The floor in TruckScene is a 0.2 ft slab centred at y = 0.1, so its top face
+ * — the surface cargo actually rests on — is at y = 0.2. Several modules used
+ * to hard-code 0.1 here, which let cargo sit 0.1 ft inside the deck and made
+ * floor-contact checks miss boxes that the physics engine had settled at 0.2.
+ */
+export const DECK_SURFACE_Y = 0.2;
+
 // Standard 53' trailer dimensions in feet
 export const TRUCK_DIMENSIONS = {
   length: 53,

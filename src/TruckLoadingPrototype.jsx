@@ -7,6 +7,7 @@ import {
   TRUCK_DIMENSIONS,
   TRUCK_VOLUME,
   MAX_BOXES,
+  DECK_SURFACE_Y,
   STRESS_TEST_TARGET,         // US6 Yash
   HEAVY_BOX_MASS_THRESHOLD    // US5 Rhea
 } from './constants';
@@ -15,6 +16,7 @@ import { initScene } from './TruckScene';
 import { useHistory } from './useHistory';
 import { GhostPreview } from './GhostPreview';
 import { getPlacementSuggestions } from './placementSuggestions';
+import { estimateMass, suggestLoadOrder, makeAABB, withinBounds } from './packingScore';
 import Header from './Header';
 import ControlPanel from './ControlPanel';
 import ControlsGuide from './ControlsGuide';
@@ -192,18 +194,29 @@ const TruckLoadingPrototype = () => {
   };
 
   // ── US1 Yash: load-example helpers ────────────────────────────────────────
-  const mapSteelcaseBoxToRuntimeType = (exampleId, boxDef, index) => ({
-    id:         `${exampleId}-${boxDef.typeId}-${index}`,
-    label:      boxDef.label,
-    color:      boxDef.color,
-    dimensions: {
+  const mapSteelcaseBoxToRuntimeType = (exampleId, boxDef, index) => {
+    const dimensions = {
       width:  boxDef.dimensionsInches.width  / 12,
       height: boxDef.dimensionsInches.height / 12,
       depth:  boxDef.dimensionsInches.depth  / 12
-    },
-    physics: { mass: 20, friction: 0.9, restitution: 0.0 },
-    fragile: boxDef.fragile ?? false  // US5
-  });
+    };
+    return {
+      id:    `${exampleId}-${boxDef.typeId}-${index}`,
+      label: boxDef.label,
+      color: boxDef.color,
+      dimensions,
+      // Estimate from volume when the dataset carries no weight — a flat 20 lb
+      // for every carton made the weight-aware ranking meaningless.
+      physics: {
+        mass: boxDef.mass ?? estimateMass({
+          x: dimensions.width, y: dimensions.height, z: dimensions.depth
+        }),
+        friction: 0.9,
+        restitution: 0.0
+      },
+      fragile: boxDef.fragile ?? false  // US5
+    };
+  };
 
   const buildQueueFromExample = useCallback((example) => {
     const queue = [];
@@ -297,19 +310,38 @@ const TruckLoadingPrototype = () => {
   }, []);
 
   const refreshPlacementSuggestions = useCallback((showNoFitAlert = false) => {
-    if (!selectedBoxType || !ghostPreviewRef.current) {
-      ghostPreviewRef.current?.hide();
+    if (!ghostPreviewRef.current) return;
+
+    // The ghost must describe the carton "Snap Last Box" will actually move —
+    // otherwise we were ranking spots for the NEXT queued SKU and then snapping
+    // a different box into them (and overwriting its collision size to match).
+    // The target is also excluded from the obstacle set: with it left in, every
+    // suggestion had to dodge the box's own spawn position, which is what
+    // scattered cartons down the trailer instead of packing them together.
+    const target = cargoRegistryRef.current[cargoRegistryRef.current.length - 1] ?? null;
+    const source = target ?? selectedBoxType;
+
+    if (!source) {
+      ghostPreviewRef.current.hide();
       setSuggestionCandidates([]);
       setSuggestion(null);
       return;
     }
 
-    const size = {
-      x: selectedBoxType.dimensions.width,
-      y: selectedBoxType.dimensions.height,
-      z: selectedBoxType.dimensions.depth
-    };
-    const candidates = getPlacementSuggestions(size, cargoRegistryRef.current, 3);
+    const dims = target ? target.dimensions : selectedBoxType.dimensions;
+    const size = { x: dims.width, y: dims.height, z: dims.depth };
+    const ghostColor = target
+      ? (target.baseMaterial?.color
+          ? `#${target.baseMaterial.color.getHexString()}`
+          : '#00ff88')
+      : selectedBoxType.color;
+
+    const candidates = getPlacementSuggestions(size, cargoRegistryRef.current, 3, {
+      mass: source.physics?.mass ?? estimateMass(size),
+      fragile: source.fragile ?? false,
+      exclude: target ? [target] : []
+    });
+
     setSuggestionCandidates(candidates);
     const best = candidates[0] ?? null;
     setSuggestion(
@@ -322,7 +354,7 @@ const TruckLoadingPrototype = () => {
       ghostPreviewRef.current.show(
         best.position,
         best.size,
-        selectedBoxType.color,
+        ghostColor,
         best.quaternion
       );
     } else {
@@ -404,7 +436,9 @@ const TruckLoadingPrototype = () => {
           const w        = parseFloat(cols[widIdx])  || 0;
           const h        = parseFloat(cols[hgtIdx])  || 0;
           const isZeroDim = l === 0 && w === 0 && h === 0;
+          const wgtIdx   = headers.indexOf('Weight');
           const qty      = qtyIdx  !== -1 ? parseInt(cols[qtyIdx])  || 1 : 1;
+          const rowWeight = wgtIdx !== -1 ? parseFloat(cols[wgtIdx]) || 0 : 0;
           const stopVal  = stopIdx !== -1 && cols[stopIdx] ? cols[stopIdx].replace(/"/g, '').trim() : 'Unassigned';
           const dimString = isZeroDim ? `0″ × 0″ × 0″` : `${l}″ × ${w}″ × ${h}″`;
           const groupKey  = `${stopVal}_${dimString}`;
@@ -418,7 +452,15 @@ const TruckLoadingPrototype = () => {
               isZeroDim,
               availableQty: 0,
               stop:         stopVal,
-              physics:      { mass: 20, friction: 0.9, restitution: 0.0 },
+              // Use the CSV's Weight column when present, else estimate from
+              // volume. A flat 20 lb made weight-aware ranking meaningless.
+              physics: {
+                mass: rowWeight > 0
+                  ? rowWeight
+                  : estimateMass({ x: l / 12, y: h / 12, z: w / 12 }),
+                friction: 0.9,
+                restitution: 0.0
+              },
               fragile:      false
             };
           }
@@ -491,12 +533,40 @@ const TruckLoadingPrototype = () => {
     const isLongAndThin = boxType.dimensions.height > 2.5 && Math.min(boxType.dimensions.width, boxType.dimensions.depth) < 1.0;
     if (isLongAndThin) box.quaternion.setFromEuler(new THREE.Euler(0, 0, Math.PI / 2));
 
+    // entry.size must be the WORLD-axis-aligned extent (see CollisionSystem /
+    // DragController). Turning the parcel 90° about Z swaps its width and
+    // height in world space; storing the unrotated dimensions here gave every
+    // 48" parcel the wrong collision bounds.
+    const worldSize = isLongAndThin
+      ? { x: boxType.dimensions.height, y: boxType.dimensions.width, z: boxType.dimensions.depth }
+      : { x: boxType.dimensions.width, y: boxType.dimensions.height, z: boxType.dimensions.depth };
+
     box.position.set(spawnX, 8, spawnZ);
     box.updateMatrixWorld(true);
     const bbox = new THREE.Box3().setFromObject(box);
     box.position.y += 0.22 - bbox.min.y;
     if (layer > 0) box.position.y += layer * 1.15;
     box.updateMatrixWorld(true);
+
+    // The spawn grid is fixed and was not collision-checked. Once cargo has
+    // been packed together (by AI Best Fit, or by hand) a later slot can land
+    // *inside* an already-placed carton; the solver then ejects both, which
+    // showed up as interpenetrating and toppled boxes. Rest the new carton on
+    // top of whatever already occupies its column instead.
+    const spawnBox = new THREE.Box3().setFromObject(box);
+    let columnTop = DECK_SURFACE_Y;
+    for (const other of cargoRegistryRef.current) {
+      const o = makeAABB(other.mesh.position, other.size);
+      if (spawnBox.min.x < o.max.x && spawnBox.max.x > o.min.x &&
+          spawnBox.min.z < o.max.z && spawnBox.max.z > o.min.z) {
+        columnTop = Math.max(columnTop, o.max.y);
+      }
+    }
+    const clearance = columnTop + 0.02 - spawnBox.min.y;
+    if (clearance > 0) {
+      box.position.y += clearance;
+      box.updateMatrixWorld(true);
+    }
 
     box.castShadow    = currentCount < 30; // US6: skip distant shadow casters
     box.receiveShadow = true;
@@ -518,7 +588,7 @@ const TruckLoadingPrototype = () => {
       label:        boxType.label,
       mesh:         box,
       body,
-      size:         { x: boxType.dimensions.width, y: boxType.dimensions.height, z: boxType.dimensions.depth },
+      size:         { ...worldSize },
       dimensions:   { ...boxType.dimensions },
       physics:      { ...boxType.physics },
       fragile:      isFragile,   // US5
@@ -640,6 +710,19 @@ const TruckLoadingPrototype = () => {
       });
     }
   }, [boxQueue, addBox, addBoxFromType, buildQueueSummary]);
+
+  // Reorder the pending queue heaviest-first, fragile last. Arrival order — not
+  // the scoring function — is what strands heavy cartons near the roof, because
+  // by the time they show up the deck is already full.
+  const sortQueueForPacking = useCallback(() => {
+    setBoxQueue(prev => {
+      if (prev.length < 2) return prev;
+      const sorted = suggestLoadOrder(prev);
+      setQueueSummary(buildQueueSummary(sorted));
+      setSelectedBoxType(sorted[0]);
+      return sorted;
+    });
+  }, [buildQueueSummary]);
 
   // ── US6 Yash: stress test ──────────────────────────────────────────────────
   const runStressTest = useCallback(() => {
@@ -774,23 +857,65 @@ const TruckLoadingPrototype = () => {
     if (!suggestion || boxes.length === 0) return;
     const lastEntry = cargoRegistryRef.current[cargoRegistryRef.current.length - 1];
     if (!lastEntry) return;
-    if (!checkStabilityOnPlace(suggestion.position, suggestion.size)) return;
+
+    // The stored suggestion was computed when the layout last changed, but the
+    // physics world keeps settling afterwards. Applying a stale spot dropped
+    // cartons into neighbours that had since drifted, so re-solve against the
+    // current positions and fall back to the stored spot only if nothing fits.
+    const dims = lastEntry.dimensions;
+    const fresh = getPlacementSuggestions(
+      { x: dims.width, y: dims.height, z: dims.depth },
+      cargoRegistryRef.current,
+      1,
+      {
+        mass: lastEntry.physics?.mass ?? estimateMass(lastEntry.size),
+        fragile: lastEntry.fragile ?? false,
+        exclude: [lastEntry]
+      }
+    )[0];
+
+    // Do NOT fall back to the stored suggestion: it was ranked for whichever
+    // carton was last previewed, so applying it here placed 48" parcels in a
+    // pose that was never validated for them — through the trailer wall and
+    // under the deck. If nothing fits this carton right now, say so.
+    if (!fresh) {
+      alert('No valid placement found for this box — try rotating it or freeing up space.');
+      return;
+    }
+    const target = fresh;
+
+    // Belt-and-braces: never commit a pose that is not physically inside the
+    // trailer. The search already guarantees this, but a silent bad placement
+    // (a 4 ft parcel through the sidewall) is far worse than a refused click.
+    if (!withinBounds(target.position, target.size, TRUCK_DIMENSIONS)) {
+      console.warn('Rejected out-of-bounds suggestion', target.position, target.size);
+      alert('No valid placement found for this box — try rotating it or freeing up space.');
+      return;
+    }
+
+    if (!checkStabilityOnPlace(target.position, target.size)) return;
 
     const oldPos = lastEntry.mesh.position.clone();
-    lastEntry.mesh.position.copy(suggestion.position);
-    if (suggestion.quaternion) lastEntry.mesh.quaternion.copy(suggestion.quaternion);
-    lastEntry.size.x = suggestion.size.x; lastEntry.size.y = suggestion.size.y; lastEntry.size.z = suggestion.size.z;
+    lastEntry.mesh.position.copy(target.position);
+    if (target.quaternion) lastEntry.mesh.quaternion.copy(target.quaternion);
+    lastEntry.size.x = target.size.x; lastEntry.size.y = target.size.y; lastEntry.size.z = target.size.z;
     if (lastEntry.body) {
-      lastEntry.body.position.set(suggestion.position.x, suggestion.position.y, suggestion.position.z);
+      lastEntry.body.position.set(target.position.x, target.position.y, target.position.z);
       lastEntry.body.quaternion.set(
         lastEntry.mesh.quaternion.x,
         lastEntry.mesh.quaternion.y,
         lastEntry.mesh.quaternion.z,
         lastEntry.mesh.quaternion.w
       );
-      lastEntry.body.velocity.set(0, 0, 0); lastEntry.body.angularVelocity.set(0, 0, 0); lastEntry.body.wakeUp();
+      lastEntry.body.velocity.set(0, 0, 0);
+      lastEntry.body.angularVelocity.set(0, 0, 0);
+      // Put it to sleep rather than waking it: the placement is already a
+      // resting, collision-free pose, so handing it to the solver awake just
+      // let it be nudged off the stack and settle somewhere slightly wrong.
+      // Contact from a dragged carton still wakes it normally.
+      lastEntry.body.sleep();
     }
-    saveToHistoryRef.current?.(lastEntry.mesh, oldPos, suggestion.position);
+    saveToHistoryRef.current?.(lastEntry.mesh, oldPos, target.position);
     setLayoutVersion(prev => prev + 1);
     ghostPreviewRef.current?.hide();
     setSuggestion(null);
@@ -878,6 +1003,7 @@ const TruckLoadingPrototype = () => {
         queueCount={boxQueue.length}
         queueSummary={queueSummary}
         addNextQueuedBox={addNextQueuedBox}
+        sortQueueForPacking={sortQueueForPacking}
         runStressTest={runStressTest}
         isStressTestRunning={isStressTestRunning}
         stressResult={stressResult}
@@ -886,6 +1012,7 @@ const TruckLoadingPrototype = () => {
         hasSuggestion={!!suggestion}
         isCalcSuggestion={isCalcSuggestion}
         suggestionCount={suggestionCandidates.length}
+        suggestionReasons={suggestionCandidates[0]?.reasons ?? []}
         activeStopFilter={activeStopFilter}
         setActiveStopFilter={setActiveStopFilter}
         onFinishSession={handleFinishSession}

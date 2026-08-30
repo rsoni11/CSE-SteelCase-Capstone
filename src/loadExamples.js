@@ -25,7 +25,8 @@ export const STEELCASE_LOAD_EXAMPLES = [
         label: 'Steelcase Flat 29" x 26" x 5.5"',
         dimensionsInches: { width: 29.0, depth: 26.0, height: 5.5 },
         color: '#9B59B6',
-        quantity: 7
+        quantity: 7,
+        fragile: true   // matches box4 in constants.js (flat panel / glass-type)
       }
     ]
   },
@@ -46,14 +47,16 @@ export const STEELCASE_LOAD_EXAMPLES = [
         label: 'Steelcase Flat 29" x 26" x 5.5"',
         dimensionsInches: { width: 29.0, depth: 26.0, height: 5.5 },
         color: '#9B59B6',
-        quantity: 8
+        quantity: 8,
+        fragile: true   // matches box4 in constants.js (flat panel / glass-type)
       },
       {
         typeId: 'sc-b-small-1275x75x575',
         label: 'Steelcase Accessory 12.75" x 7.5" x 5.75"',
         dimensionsInches: { width: 12.75, depth: 7.5, height: 5.75 },
         color: '#E74C3C',
-        quantity: 15
+        quantity: 15,
+        fragile: true   // matches box5 in constants.js (small accessory)
       }
     ]
   },
