@@ -23,7 +23,12 @@ import {
   restingCentreY,
   withinBounds,
   suggestLoadOrder,
-  normaliseItem
+  normaliseItem,
+  fragileLoadPaths,
+  WEIGHTS,
+  FLUSH_FACE_TARGET,
+  TIP_SAFE_RATIO,
+  TIP_BLOCK_RATIO
 } from './packingScore.js';
 
 const box = (x, y, z, sx, sy, sz, extra = {}) => ({
@@ -387,4 +392,157 @@ test('scorePlacement always returns a finite score', () => {
     const r = scorePlacement(b, c);
     assert.ok(Number.isFinite(r.score), `score was ${r.score}`);
   }
+});
+
+// ── US1: flush faces ─────────────────────────────────────────────────────────
+
+test('computeContact counts which faces are flush, not just how much area', () => {
+  const halfL = DEFAULT_TRUCK.length / 2;
+  const halfW = DEFAULT_TRUCK.width / 2;
+
+  const open = computeContact(onFloor(0, 0, 2, 2, 2), [], DEFAULT_TRUCK);
+  assert.equal(open.flushFaces, 1, 'open deck: the floor only');
+  assert.equal(open.faces.negY, true);
+
+  const corner = computeContact(
+    onFloor(-halfL + 1, -halfW + 1, 2, 2, 2), [], DEFAULT_TRUCK
+  );
+  assert.equal(corner.flushFaces, 3, 'deck + two walls');
+  assert.equal(corner.faces.negX, true);
+  assert.equal(corner.faces.negZ, true);
+});
+
+test('a carton merely level with a distant one is not counted as flush', () => {
+  const neighbour = onFloor(20, 0, 2, 2, 2);
+  const contact = computeContact(onFloor(0, 0, 2, 2, 2), [neighbour], DEFAULT_TRUCK);
+  assert.equal(contact.flushFaces, 1, 'only the deck');
+  assert.equal(contact.faces.posX, false);
+});
+
+test('a carton set against a neighbour gains that face', () => {
+  const neighbour = onFloor(0, 0, 2, 2, 2);
+  const contact = computeContact(onFloor(2, 0, 2, 2, 2), [neighbour], DEFAULT_TRUCK);
+  assert.equal(contact.faces.negX, true, 'flush against the neighbour');
+  assert.equal(contact.flushFaces, 2, 'deck + neighbour');
+});
+
+test('the flush term rewards a corner over open deck', () => {
+  const halfL = DEFAULT_TRUCK.length / 2;
+  const halfW = DEFAULT_TRUCK.width / 2;
+  const open = scorePlacement(onFloor(0, 0, 2, 2, 2), ctx([]));
+  const corner = scorePlacement(onFloor(-halfL + 1, -halfW + 1, 2, 2, 2), ctx([]));
+
+  assert.ok(corner.terms.flush < open.terms.flush, 'the corner should score better');
+  assert.equal(corner.terms.flush, -WEIGHTS.flush, 'three faces earns the full bonus');
+  assert.equal(open.terms.flush, -WEIGHTS.flush / FLUSH_FACE_TARGET);
+});
+
+// ── US2: tip-over guard ──────────────────────────────────────────────────────
+
+test('a flat pose carries no tipping penalty', () => {
+  const flat = scorePlacement(onFloor(0, 0, 2, 0.5, 2), ctx([]));
+  assert.equal(flat.terms.tipping, 0);
+  assert.ok(flat.slenderness < TIP_SAFE_RATIO);
+});
+
+test('a tall narrow pose carries the full tipping penalty', () => {
+  const upright = scorePlacement(onFloor(0, 0, 0.4, 3, 0.4), ctx([]));
+  assert.ok(upright.slenderness >= TIP_BLOCK_RATIO);
+  assert.equal(upright.terms.tipping, WEIGHTS.tipping);
+});
+
+test('the tipping penalty ramps between the safe and blocking ratios', () => {
+  // height / narrowest footprint edge = 3.5, half way between 2.0 and 5.0
+  const mid = scorePlacement(onFloor(0, 0, 1, 3.5, 1), ctx([]));
+  assert.ok(Math.abs(mid.slenderness - 3.5) < 1e-9);
+  assert.ok(Math.abs(mid.terms.tipping - WEIGHTS.tipping / 2) < 1e-6);
+});
+
+test('the same carton scores better lying down than standing up', () => {
+  const upright = scorePlacement(onFloor(0, 0, 0.4, 4, 0.8), ctx([], { mass: 26 }));
+  const lying = scorePlacement(onFloor(0, 0, 4, 0.4, 0.8), ctx([], { mass: 26 }));
+  assert.ok(lying.score < upright.score);
+});
+
+// ── US1: fragile load paths ──────────────────────────────────────────────────
+
+test('fragileLoadPaths follows the column, not just the carton underneath', () => {
+  const panel  = onFloor(0, 0, 2, 0.5, 2, { mass: 30, fragile: true });
+  const spacer = box(0, FLOOR_Y + 0.5 + 0.5, 0, 2, 1, 2, { mass: 20 });
+  const top    = box(0, FLOOR_Y + 1.5 + 0.25, 0, 2, 0.5, 2, { mass: 20 });
+
+  // An identical column six feet away with nothing fragile in it.
+  const base   = onFloor(6, 0, 2, 0.5, 2, { mass: 30, fragile: false });
+  const above  = box(6, FLOOR_Y + 0.5 + 0.5, 0, 2, 1, 2, { mass: 20 });
+
+  const flagged = fragileLoadPaths([panel, spacer, top, base, above]);
+
+  assert.equal(flagged.has(spacer), true, 'directly on the panel');
+  assert.equal(flagged.has(top), true, 'two tiers up, still loading the panel');
+  assert.equal(flagged.has(panel), false, 'the panel itself rests on the deck');
+  assert.equal(flagged.has(base), false);
+  assert.equal(flagged.has(above), false, 'a different column');
+});
+
+test('fragileLoadPaths ignores a carton that only shares a height', () => {
+  const panel = onFloor(0, 0, 2, 0.5, 2, { mass: 30, fragile: true });
+  const beside = box(20, FLOOR_Y + 0.5 + 0.5, 0, 2, 1, 2, { mass: 20 });
+  assert.equal(fragileLoadPaths([panel, beside]).has(beside), false);
+});
+
+test('an empty or single-carton trailer has no fragile load paths', () => {
+  assert.equal(fragileLoadPaths([]).size, 0);
+  assert.equal(
+    fragileLoadPaths([onFloor(0, 0, 2, 0.5, 2, { fragile: true })]).size,
+    0
+  );
+});
+
+test('a heavy carton is penalised for loading a fragile one indirectly', () => {
+  const panel  = onFloor(0, 0, 2, 0.5, 2, { mass: 30, fragile: true });
+  const spacer = box(0, FLOOR_Y + 0.5 + 0.5, 0, 2, 1, 2, { mass: 20 });
+  const base   = onFloor(6, 0, 2, 0.5, 2, { mass: 30, fragile: false });
+  const safe   = box(6, FLOOR_Y + 0.5 + 0.5, 0, 2, 1, 2, { mass: 20 });
+  const obstacles = [panel, spacer, base, safe];
+
+  const heavyCtx = ctx(obstacles, { mass: HEAVY_MASS + 20 });
+  const overFragile = scorePlacement(box(0, FLOOR_Y + 1.5 + 0.4, 0, 2, 0.8, 2), heavyCtx);
+  const overSafe = scorePlacement(box(6, FLOOR_Y + 1.5 + 0.4, 0, 2, 0.8, 2), heavyCtx);
+
+  assert.equal(overFragile.loadsFragileBelow, true);
+  assert.equal(overSafe.loadsFragileBelow, false);
+  assert.equal(overFragile.terms.fragileColumn, WEIGHTS.fragileColumn);
+  assert.equal(overSafe.terms.fragileColumn, 0);
+  assert.ok(overSafe.score < overFragile.score);
+});
+
+test('a light carton may sit above a fragile one', () => {
+  const panel  = onFloor(0, 0, 2, 0.5, 2, { mass: 30, fragile: true });
+  const spacer = box(0, FLOOR_Y + 0.5 + 0.5, 0, 2, 1, 2, { mass: 20 });
+  const obstacles = [panel, spacer];
+
+  const light = scorePlacement(
+    box(0, FLOOR_Y + 1.5 + 0.4, 0, 2, 0.8, 2),
+    ctx(obstacles, { mass: HEAVY_MASS - 10 })
+  );
+  assert.equal(light.terms.fragileColumn, 0);
+  assert.equal(light.loadsFragileBelow, false);
+});
+
+test('direct contact with a fragile carton is charged once, at the higher rate', () => {
+  const panel = onFloor(0, 0, 2, 0.5, 2, { mass: 30, fragile: true });
+  const heavy = scorePlacement(
+    box(0, FLOOR_Y + 0.5 + 0.4, 0, 2, 0.8, 2),
+    ctx([panel], { mass: HEAVY_MASS + 20 })
+  );
+  assert.ok(heavy.terms.fragileUnder > 0);
+  assert.equal(heavy.terms.fragileColumn, 0, 'not double-charged');
+});
+
+test('loadStats hands the fragile load paths to the scorer', () => {
+  const panel  = onFloor(0, 0, 2, 0.5, 2, { mass: 30, fragile: true });
+  const spacer = box(0, FLOOR_Y + 0.5 + 0.5, 0, 2, 1, 2, { mass: 20 });
+  const stats = loadStats([panel, spacer]);
+  assert.ok(stats.fragileBelow instanceof Set);
+  assert.equal(stats.fragileBelow.has(spacer), true);
 });

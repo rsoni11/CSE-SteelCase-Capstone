@@ -15,7 +15,7 @@ import { STEELCASE_LOAD_EXAMPLES } from './loadExamples';   // US1 Yash
 import { initScene } from './TruckScene';
 import { useHistory } from './useHistory';
 import { GhostPreview } from './GhostPreview';
-import { getPlacementSuggestions } from './placementSuggestions';
+import { FitSuggestionSystem } from './FitSuggestionSystem';
 import { estimateMass, suggestLoadOrder, makeAABB, withinBounds } from './packingScore';
 import Header from './Header';
 import ControlPanel from './ControlPanel';
@@ -62,6 +62,8 @@ const TruckLoadingPrototype = () => {
   const physicsApiRef      = useRef(null);
   const ghostPreviewRef    = useRef(null);
   const stabilitySystemRef = useRef(null);
+  const fitSuggestionRef   = useRef(null);   // US1/US2 Yash: AI Best Fit engine
+  const suggestionTargetRef = useRef(null);  // the carton the ghost is describing
   const initialLoadSnapshotRef = useRef(null);
   // US6 Yash: geometry/material caches
   const geometryCacheRef   = useRef(new Map());
@@ -81,6 +83,7 @@ const TruckLoadingPrototype = () => {
   const [suggestion, setSuggestion]                   = useState(null);
   const [suggestionCandidates, setSuggestionCandidates] = useState([]);
   const [isCalcSuggestion, setIsCalcSuggestion]       = useState(false);
+  const [searchDiagnostics, setSearchDiagnostics]     = useState(null);
   const [layoutVersion, setLayoutVersion]             = useState(0);
   // US1 Yash: load examples + queue
   const [boxQueue, setBoxQueue]                       = useState([]);
@@ -294,10 +297,12 @@ const TruckLoadingPrototype = () => {
     dragControllerRef.current  = dragController;
     ghostPreviewRef.current    = new GhostPreview(scene);
     stabilitySystemRef.current = new StabilitySystem(cargoRegistryRef.current);
+    fitSuggestionRef.current   = new FitSuggestionSystem(cargoRegistryRef.current);
 
     return () => {
       ghostPreviewRef.current?.hide();
       stabilitySystemRef.current = null;
+      fitSuggestionRef.current   = null;
       cleanup();
       disposeSharedResources();
     };
@@ -310,7 +315,7 @@ const TruckLoadingPrototype = () => {
   }, []);
 
   const refreshPlacementSuggestions = useCallback((showNoFitAlert = false) => {
-    if (!ghostPreviewRef.current) return;
+    if (!ghostPreviewRef.current || !fitSuggestionRef.current) return;
 
     // The ghost must describe the carton "Snap Last Box" will actually move —
     // otherwise we were ranking spots for the NEXT queued SKU and then snapping
@@ -325,6 +330,8 @@ const TruckLoadingPrototype = () => {
       ghostPreviewRef.current.hide();
       setSuggestionCandidates([]);
       setSuggestion(null);
+      setSearchDiagnostics(null);
+      suggestionTargetRef.current = null;
       return;
     }
 
@@ -336,24 +343,32 @@ const TruckLoadingPrototype = () => {
           : '#00ff88')
       : selectedBoxType.color;
 
-    const candidates = getPlacementSuggestions(size, cargoRegistryRef.current, 3, {
+    // US2: the engine scores every orientation of the carton, so `size` here is
+    // the UNROTATED SKU and the winning pose comes back in the result.
+    const exclude = target ? [target] : [];
+    const candidates = fitSuggestionRef.current.findBestFits(size, 3, {
       mass: source.physics?.mass ?? estimateMass(size),
       fragile: source.fragile ?? false,
-      exclude: target ? [target] : []
+      exclude
     });
+    setSearchDiagnostics(fitSuggestionRef.current.lastSearch);
 
     setSuggestionCandidates(candidates);
     const best = candidates[0] ?? null;
-    setSuggestion(
-      best
-        ? { position: best.position, size: best.size, quaternion: best.quaternion }
-        : null
-    );
+    // Remember what the ghost is describing: snapping must move THAT carton
+    // into THAT pose, not re-solve and land somewhere the loader never saw.
+    suggestionTargetRef.current = best ? target : null;
+    setSuggestion(best);
 
     if (best) {
+      // US2: the ghost renders in the winning orientation, which is not
+      // necessarily the one the carton is currently sitting in. It is built
+      // from the carton's own dimensions and then turned, exactly like the real
+      // mesh — `best.size` is the world-aligned extent of that pose, and using
+      // it here would rotate the preview a second time.
       ghostPreviewRef.current.show(
         best.position,
-        best.size,
+        size,
         ghostColor,
         best.quaternion
       );
@@ -601,6 +616,7 @@ const TruckLoadingPrototype = () => {
     setLayoutVersion(prev => prev + 1);
     ghostPreviewRef.current?.hide();
     setSuggestion(null);
+    suggestionTargetRef.current = null;
 
     // US5: check stacking after state settles
     setTimeout(() => checkFragileStacking(entry), 100);
@@ -667,6 +683,8 @@ const TruckLoadingPrototype = () => {
     ghostPreviewRef.current?.hide();
     setSuggestion(null);
     setSuggestionCandidates([]);
+    setSearchDiagnostics(null);
+    suggestionTargetRef.current = null;
     setBoxes([]);
     setStats(prev => ({ ...prev, boxCount: 0 }));
     setFragileWarning(null);
@@ -844,45 +862,70 @@ const TruckLoadingPrototype = () => {
   }, []);
 
   // ── AI Best Fit ────────────────────────────────────────────────────────────
+  /**
+   * US1 task 3: run a search with the "calculating" indicator up.
+   *
+   * The search is synchronous and can hold the main thread for ~100 ms on a
+   * full trailer, so the spinner has to be on screen BEFORE it starts. Two
+   * nested rAFs are what guarantees that: the first runs in the frame React
+   * commits the state change, the second only after the browser has painted it.
+   * A bare setTimeout could still fire before that paint.
+   */
+  const runWithSuggestionIndicator = useCallback((work) => {
+    setIsCalcSuggestion(true);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try {
+          work();
+        } finally {
+          setIsCalcSuggestion(false);
+        }
+      });
+    });
+  }, []);
+
   const handleSuggestPlacement = useCallback(() => {
     if (!selectedBoxType) return;
-    setIsCalcSuggestion(true);
-    setTimeout(() => {
-      refreshPlacementSuggestions(true);
-      setIsCalcSuggestion(false);
-    }, 30);
-  }, [selectedBoxType, refreshPlacementSuggestions]);
+    runWithSuggestionIndicator(() => refreshPlacementSuggestions(true));
+  }, [selectedBoxType, refreshPlacementSuggestions, runWithSuggestionIndicator]);
 
-  const handleSnapToSuggestion = useCallback(() => {
-    if (!suggestion || boxes.length === 0) return;
+  const performSnapToSuggestion = useCallback(() => {
+    if (!suggestion || boxes.length === 0 || !fitSuggestionRef.current) return;
     const lastEntry = cargoRegistryRef.current[cargoRegistryRef.current.length - 1];
     if (!lastEntry) return;
 
-    // The stored suggestion was computed when the layout last changed, but the
-    // physics world keeps settling afterwards. Applying a stale spot dropped
-    // cartons into neighbours that had since drifted, so re-solve against the
-    // current positions and fall back to the stored spot only if nothing fits.
-    const dims = lastEntry.dimensions;
-    const fresh = getPlacementSuggestions(
-      { x: dims.width, y: dims.height, z: dims.depth },
-      cargoRegistryRef.current,
-      1,
-      {
-        mass: lastEntry.physics?.mass ?? estimateMass(lastEntry.size),
-        fragile: lastEntry.fragile ?? false,
-        exclude: [lastEntry]
-      }
-    )[0];
+    // US2 acceptance: the carton must end up in the pose the ghost is showing.
+    // So prefer the displayed suggestion — but only once it has been re-checked
+    // against the registry as it stands now, because the physics world keeps
+    // settling after the preview was drawn and the spot can stop being free.
+    //
+    // We re-solve only when that check fails, and never apply a suggestion that
+    // was ranked for a DIFFERENT carton: it was validated for another SKU's
+    // dimensions, which is how 48" parcels ended up posed through the trailer
+    // wall and under the deck.
+    const previewedThisCarton = suggestionTargetRef.current === lastEntry;
+    let target = previewedThisCarton &&
+                 fitSuggestionRef.current.isStillValid(suggestion, [lastEntry])
+      ? suggestion
+      : null;
 
-    // Do NOT fall back to the stored suggestion: it was ranked for whichever
-    // carton was last previewed, so applying it here placed 48" parcels in a
-    // pose that was never validated for them — through the trailer wall and
-    // under the deck. If nothing fits this carton right now, say so.
-    if (!fresh) {
+    if (!target) {
+      const dims = lastEntry.dimensions;
+      target = fitSuggestionRef.current.findBestFit(
+        { x: dims.width, y: dims.height, z: dims.depth },
+        {
+          mass: lastEntry.physics?.mass ?? estimateMass(lastEntry.size),
+          fragile: lastEntry.fragile ?? false,
+          exclude: [lastEntry]
+        }
+      );
+    }
+
+    // If nothing fits this carton right now, say so rather than guessing.
+    if (!target) {
       alert('No valid placement found for this box — try rotating it or freeing up space.');
       return;
     }
-    const target = fresh;
 
     // Belt-and-braces: never commit a pose that is not physically inside the
     // trailer. The search already guarantees this, but a silent bad placement
@@ -897,6 +940,8 @@ const TruckLoadingPrototype = () => {
 
     const oldPos = lastEntry.mesh.position.clone();
     lastEntry.mesh.position.copy(target.position);
+    // US2 task 3: apply the winning rotation to the real mesh, so the carton
+    // ends up in the orientation the preview promised.
     if (target.quaternion) lastEntry.mesh.quaternion.copy(target.quaternion);
     lastEntry.size.x = target.size.x; lastEntry.size.y = target.size.y; lastEntry.size.z = target.size.z;
     if (lastEntry.body) {
@@ -920,8 +965,14 @@ const TruckLoadingPrototype = () => {
     ghostPreviewRef.current?.hide();
     setSuggestion(null);
     setSuggestionCandidates([]);
+    suggestionTargetRef.current = null;
     setTimeout(() => checkFragileStacking(lastEntry), 100);
   }, [suggestion, boxes.length, checkFragileStacking, checkStabilityOnPlace]);
+
+  // Snapping can fall back to a full re-solve, so it gets the indicator too.
+  const handleSnapToSuggestion = useCallback(() => {
+    runWithSuggestionIndicator(performSnapToSuggestion);
+  }, [performSnapToSuggestion, runWithSuggestionIndicator]);
 
   const handleUndo = useCallback(() => {
     undo();
@@ -1013,6 +1064,8 @@ const TruckLoadingPrototype = () => {
         isCalcSuggestion={isCalcSuggestion}
         suggestionCount={suggestionCandidates.length}
         suggestionReasons={suggestionCandidates[0]?.reasons ?? []}
+        suggestionOrientation={suggestion?.orientation ?? null}
+        searchDiagnostics={searchDiagnostics}
         activeStopFilter={activeStopFilter}
         setActiveStopFilter={setActiveStopFilter}
         onFinishSession={handleFinishSession}

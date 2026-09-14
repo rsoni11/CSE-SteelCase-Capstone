@@ -41,6 +41,8 @@ const ControlPanel = ({
   isCalcSuggestion,
   suggestionCount = 0,
   suggestionReasons = [],
+  suggestionOrientation = null,
+  searchDiagnostics = null,
   activeStopFilter,
   setActiveStopFilter,
   onFinishSession,
@@ -308,6 +310,16 @@ const ControlPanel = ({
                 ? `● Ghost preview visible in truck (${suggestionCount} ranked suggestion${suggestionCount === 1 ? '' : 's'})`
                 : 'No valid recommendation for current box'}
             </div>
+
+            {/* US2: say which rotation won, so the ghost's pose is not a surprise.
+                US1: and how long the search took, against its 200 ms budget. */}
+            {hasSuggestion && searchDiagnostics && (
+              <div style={{ marginTop: '4px', fontSize: '10px', color: '#6c8a7e', textAlign: 'center' }}>
+                {suggestionOrientation ? `Orientation: ${suggestionOrientation} · ` : ''}
+                {searchDiagnostics.orientationsTried}/{searchDiagnostics.orientationsAvailable} rotations tried
+                {' · '}{Math.round(searchDiagnostics.elapsedMs)} ms
+              </div>
+            )}
 
             {/* Why this spot — makes the ranking auditable instead of a black box */}
             {hasSuggestion && suggestionReasons.length > 0 && (

@@ -6,6 +6,19 @@ export class GhostPreview {
     this.mesh  = null;
   }
 
+  /**
+   * Draw the preview.
+   *
+   * @param {THREE.Vector3} position  centre of the placement
+   * @param {object} size   the carton's OWN (unrotated) dimensions — the same
+   *                        ones its real mesh geometry is built from. Passing
+   *                        the world-axis-aligned extents here instead applies
+   *                        the rotation twice: the ghost for a 48" parcel drew
+   *                        it standing on end while the suggestion had it lying
+   *                        flat, so the preview disagreed with what snapping did.
+   * @param {string} hexColor
+   * @param {THREE.Quaternion} quaternion  the winning orientation (US2)
+   */
   show(position, size, hexColor = '#00ff88', quaternion = null) {
     this.hide();
 
