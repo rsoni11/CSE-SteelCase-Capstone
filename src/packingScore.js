@@ -6,12 +6,17 @@
  *
  * SCORE CONVENTION: lower is better (unchanged from the previous scorer).
  *
- * Why this file exists — the old scorer in placementSuggestions.js had a bug
- * that made its "wasted space" term collapse to 0 as soon as a single box was
- * on the trailer, so ranking was driven almost entirely by "is this on the
- * floor?". That is why suggestions landed in open floor space instead of
- * tucked against existing cargo. See computeContact() for the replacement:
- * we now measure real face-to-face contact area instead of a min-gap proxy.
+ * Why this file exists — the original scorer (inside the old
+ * placementSuggestions.js) had a bug that made its "wasted space" term collapse
+ * to 0 as soon as a single box was on the trailer, so ranking was driven almost
+ * entirely by "is this on the floor?". That is why suggestions landed in open
+ * floor space instead of tucked against existing cargo. See computeContact()
+ * for the replacement: we now measure real face-to-face contact area instead of
+ * a min-gap proxy.
+ *
+ * Layering: this file scores ONE placement. fitSearch.js decides which
+ * placements to try. FitSuggestionSystem.js is the THREE-facing wrapper the app
+ * talks to.
  */
 
 import { DECK_SURFACE_Y } from './constants.js';
@@ -47,16 +52,42 @@ export const NOSE_SIGN = 1;
  */
 export const WEIGHTS = {
   contact: 34,        // reward for face contact with floor/walls/neighbours
+  flush: 12,          // reward for the NUMBER of faces that are flush
   support: 30,        // penalty for an unsupported footprint
   envelope: 14,       // penalty for growing the load's bounding box
   span: 3,            // penalty for extending the load toward the door
   depth: 7,           // mild bias toward filling the deep end first
   comHeight: 22,      // penalty for carrying mass high
+  tipping: 28,        // penalty for a tall, narrow pose that would topple
   crush: 26,          // penalty for resting a heavy box on a lighter one
   fragileUnder: 140,  // heavy box on a fragile box — effectively a rejection
+  fragileColumn: 60,  // heavy box whose load path runs down onto a fragile box
   balance: 10,        // penalty for pushing the load off the centreline
   floorBonus: 5       // small preference for floor placements
 };
+
+/**
+ * Flush-face target. A carton tucked into a corner of the load touches the
+ * deck plus two neighbours/walls, so three flush faces earns the full bonus.
+ *
+ * This term exists because contact RATIO alone under-rewards the placements
+ * loaders actually want: a 48" parcel stood against the sidewall touches very
+ * little of its own surface area, yet it is the tightest spot on the trailer.
+ */
+export const FLUSH_FACE_TARGET = 3;
+
+/**
+ * Tip-over guard, expressed as height ÷ narrowest footprint edge.
+ *
+ * US2 asks the solver to try every 90° orientation rather than hard-filtering
+ * to "smallest edge down", so the check that used to be a filter now has to
+ * live in the score: a 48" x 4.5" parcel stood on its end is a legal placement
+ * and can even be the tightest one, but it falls over in transit. At or below
+ * TIP_SAFE_RATIO there is no penalty; at TIP_BLOCK_RATIO and beyond the pose
+ * carries the full WEIGHTS.tipping charge.
+ */
+export const TIP_SAFE_RATIO = 2.0;
+export const TIP_BLOCK_RATIO = 5.0;
 
 /**
  * Loaders do not centre every carton — they care about gross imbalance. The
@@ -99,6 +130,13 @@ const centre = (b) => ({
  * Fraction of the box's own surface area that is flush against the deck, a
  * wall, or another carton. This is the "snugness" signal — a box wedged into a
  * corner against two neighbours scores far higher than one sitting alone.
+ *
+ * Also reports WHICH faces are flush (`faces` / `flushFaces`). US1 asks the
+ * scorer to prefer placements flush against a wall or an existing box face,
+ * and area alone does not express that: a tall, slim parcel stood against the
+ * sidewall has a tiny contact ratio but is exactly the right spot. A face only
+ * counts when it is both coplanar AND actually overlapping — being level with
+ * a carton 20 ft down the trailer is not contact.
  */
 export function computeContact(box, obstacles, truck = DEFAULT_TRUCK) {
   const s = dims(box);
@@ -110,34 +148,60 @@ export function computeContact(box, obstacles, truck = DEFAULT_TRUCK) {
   let walls = 0;
   let neighbours = 0;
 
-  if (Math.abs(box.min.y - FLOOR_Y) <= CONTACT_EPS) floor += s.x * s.z;
+  // The five load-bearing faces. The top face is deliberately excluded: having
+  // something resting on the carton says nothing about how well IT is placed.
+  const faces = { negX: false, posX: false, negY: false, negZ: false, posZ: false };
 
-  if (Math.abs(box.min.x + halfL) <= CONTACT_EPS) walls += s.y * s.z;
-  if (Math.abs(halfL - box.max.x) <= CONTACT_EPS) walls += s.y * s.z;
-  if (Math.abs(box.min.z + halfW) <= CONTACT_EPS) walls += s.x * s.y;
-  if (Math.abs(halfW - box.max.z) <= CONTACT_EPS) walls += s.x * s.y;
+  if (Math.abs(box.min.y - FLOOR_Y) <= CONTACT_EPS) {
+    floor += s.x * s.z;
+    faces.negY = true;
+  }
+
+  if (Math.abs(box.min.x + halfL) <= CONTACT_EPS) { walls += s.y * s.z; faces.negX = true; }
+  if (Math.abs(halfL - box.max.x) <= CONTACT_EPS) { walls += s.y * s.z; faces.posX = true; }
+  if (Math.abs(box.min.z + halfW) <= CONTACT_EPS) { walls += s.x * s.y; faces.negZ = true; }
+  if (Math.abs(halfW - box.max.z) <= CONTACT_EPS) { walls += s.x * s.y; faces.posZ = true; }
 
   for (const o of obstacles) {
-    if (Math.abs(box.min.x - o.max.x) <= CONTACT_EPS ||
-        Math.abs(o.min.x - box.max.x) <= CONTACT_EPS) {
-      neighbours += overlap1D(box.min.y, box.max.y, o.min.y, o.max.y) *
-                    overlap1D(box.min.z, box.max.z, o.min.z, o.max.z);
+    const touchesNegX = Math.abs(box.min.x - o.max.x) <= CONTACT_EPS;
+    const touchesPosX = Math.abs(o.min.x - box.max.x) <= CONTACT_EPS;
+    if (touchesNegX || touchesPosX) {
+      const a = overlap1D(box.min.y, box.max.y, o.min.y, o.max.y) *
+                overlap1D(box.min.z, box.max.z, o.min.z, o.max.z);
+      neighbours += a;
+      if (a > 0) {
+        if (touchesNegX) faces.negX = true;
+        if (touchesPosX) faces.posX = true;
+      }
     }
-    if (Math.abs(box.min.y - o.max.y) <= CONTACT_EPS ||
-        Math.abs(o.min.y - box.max.y) <= CONTACT_EPS) {
-      neighbours += overlap1D(box.min.x, box.max.x, o.min.x, o.max.x) *
-                    overlap1D(box.min.z, box.max.z, o.min.z, o.max.z);
+
+    const touchesNegY = Math.abs(box.min.y - o.max.y) <= CONTACT_EPS;
+    if (touchesNegY || Math.abs(o.min.y - box.max.y) <= CONTACT_EPS) {
+      const a = overlap1D(box.min.x, box.max.x, o.min.x, o.max.x) *
+                overlap1D(box.min.z, box.max.z, o.min.z, o.max.z);
+      neighbours += a;
+      if (a > 0 && touchesNegY) faces.negY = true;
     }
-    if (Math.abs(box.min.z - o.max.z) <= CONTACT_EPS ||
-        Math.abs(o.min.z - box.max.z) <= CONTACT_EPS) {
-      neighbours += overlap1D(box.min.x, box.max.x, o.min.x, o.max.x) *
-                    overlap1D(box.min.y, box.max.y, o.min.y, o.max.y);
+
+    const touchesNegZ = Math.abs(box.min.z - o.max.z) <= CONTACT_EPS;
+    const touchesPosZ = Math.abs(o.min.z - box.max.z) <= CONTACT_EPS;
+    if (touchesNegZ || touchesPosZ) {
+      const a = overlap1D(box.min.x, box.max.x, o.min.x, o.max.x) *
+                overlap1D(box.min.y, box.max.y, o.min.y, o.max.y);
+      neighbours += a;
+      if (a > 0) {
+        if (touchesNegZ) faces.negZ = true;
+        if (touchesPosZ) faces.posZ = true;
+      }
     }
   }
 
   const total = floor + walls + neighbours;
+  let flushFaces = 0;
+  for (const k in faces) if (faces[k]) flushFaces += 1;
+
   return {
-    floor, walls, neighbours, total, surface,
+    floor, walls, neighbours, total, surface, faces, flushFaces,
     ratio: surface > 0 ? Math.min(1, total / surface) : 0
   };
 }
@@ -215,6 +279,43 @@ export function withinBounds(pos, size, truck = DEFAULT_TRUCK) {
   );
 }
 
+/**
+ * Which already-loaded cartons carry a fragile carton somewhere in their load
+ * path down to the deck.
+ *
+ * US1 asks the scorer to keep heavy cartons off fragile ones. Checking only the
+ * cartons DIRECTLY under a candidate misses the common case: a fragile flat
+ * panel on the deck, one ordinary carton on top of it, and then the solver
+ * happily recommends a 44 lb carton for the third tier. The panel still takes
+ * the whole load — it is just one layer further down.
+ *
+ * The chain is resolved once per search, not once per candidate: obstacles are
+ * walked bottom-up, so by the time a carton is considered every carton beneath
+ * it has already been flagged. O(n²) on a set that never exceeds MAX_BOXES.
+ *
+ * @returns {Set} the obstacles that rest (directly or indirectly) on a fragile one
+ */
+export function fragileLoadPaths(obstacles) {
+  const flagged = new Set();
+  if (obstacles.length < 2) return flagged;
+
+  const bottomUp = [...obstacles].sort((a, b) => a.min.y - b.min.y);
+
+  for (let i = 0; i < bottomUp.length; i += 1) {
+    const o = bottomUp[i];
+    for (let j = 0; j < i; j += 1) {
+      const below = bottomUp[j];
+      if (Math.abs(o.min.y - below.max.y) > CONTACT_EPS) continue;
+      if (!below.fragile && !flagged.has(below)) continue;
+      const area = overlap1D(o.min.x, o.max.x, below.min.x, below.max.x) *
+                   overlap1D(o.min.z, o.max.z, below.min.z, below.max.z);
+      if (area > 0) { flagged.add(o); break; }
+    }
+  }
+
+  return flagged;
+}
+
 /** Aggregate mass / centre-of-mass / envelope of everything already loaded. */
 export function loadStats(obstacles) {
   let totalMass = 0;
@@ -243,7 +344,10 @@ export function loadStats(obstacles) {
     totalMass,
     comX: totalMass > 0 ? mx / totalMass : 0,
     comZ: totalMass > 0 ? mz / totalMass : 0,
-    envelope: obstacles.length ? { minX, maxX, minY, maxY, minZ, maxZ } : null
+    envelope: obstacles.length ? { minX, maxX, minY, maxY, minZ, maxZ } : null,
+    // Computed here so the whole search shares one pass instead of redoing it
+    // for every candidate placement.
+    fragileBelow: fragileLoadPaths(obstacles)
   };
 }
 
@@ -276,6 +380,10 @@ export function scorePlacement(box, ctx) {
 
   // ── Geometry ──────────────────────────────────────────────────────────────
   const snugness = -WEIGHTS.contact * contact.ratio;
+  // How MANY faces are flush, as opposed to how much area touches. Deck + two
+  // walls/neighbours earns the whole bonus; see FLUSH_FACE_TARGET.
+  const flush = -WEIGHTS.flush *
+    Math.min(1, contact.flushFaces / FLUSH_FACE_TARGET);
   const unsupported = WEIGHTS.support * (1 - support.ratio);
   const floorBonus = support.onFloor ? -WEIGHTS.floorBonus : 0;
 
@@ -306,14 +414,27 @@ export function scorePlacement(box, ctx) {
   const fromDoor = NOSE_SIGN > 0 ? (box.min.x + halfL) : (halfL - box.max.x);
   const depth = WEIGHTS.depth * (1 - Math.min(1, fromDoor / truck.length));
 
+  // A tall, narrow pose is legal and can even be the tightest fit, but it
+  // topples the first time the trailer takes a corner. See TIP_SAFE_RATIO.
+  const slenderness = s.y / Math.max(Math.min(s.x, s.z), 1e-6);
+  const tipping = WEIGHTS.tipping * Math.min(1, Math.max(0,
+    (slenderness - TIP_SAFE_RATIO) / (TIP_BLOCK_RATIO - TIP_SAFE_RATIO)));
+
   // ── Weight ────────────────────────────────────────────────────────────────
   // Keep mass low in the stack: heavy high up is both unstable and unsafe.
   const comHeight = WEIGHTS.comHeight *
     (mass / HEAVY_MASS) * ((c.y - FLOOR_Y) / truck.height);
 
   // Never rest a heavy carton on a fragile one; avoid resting heavy on light.
+  //
+  // The load-path set normally arrives precomputed on `stats` (one pass per
+  // search). Resolving it here is the fallback for a caller that built its own
+  // stats, and is deferred until a heavy carton actually rests on something —
+  // working it out for every candidate would make the search O(n²) per spot.
+  let fragileBelow = stats.fragileBelow;
   let crush = 0;
   let fragileUnder = 0;
+  let fragileColumn = 0;
   for (const sup of support.supporters) {
     const share = sup.area / Math.max(footprint, 1e-6);
     const om = sup.obstacle.mass ?? 0;
@@ -322,8 +443,15 @@ export function scorePlacement(box, ctx) {
     // corner of a fragile one for ~1% of the penalty. Resting *any* real part
     // of a heavy carton on a fragile one is unacceptable, so once contact is
     // more than incidental the penalty jumps to most of its full value.
-    if (sup.obstacle.fragile && mass >= HEAVY_MASS && share > 0.01) {
-      fragileUnder += Math.max(0.35, Math.min(1, share / 0.25));
+    if (mass >= HEAVY_MASS && share > 0.01) {
+      if (sup.obstacle.fragile) {
+        fragileUnder += Math.max(0.35, Math.min(1, share / 0.25));
+      } else if ((fragileBelow ??= fragileLoadPaths(obstacles)).has(sup.obstacle)) {
+        // Not touching the fragile carton, but the weight still lands on it.
+        // Charged less than direct contact: an intermediate carton spreads the
+        // load, so this discourages the column without forbidding it.
+        fragileColumn += Math.max(0.35, Math.min(1, share / 0.25));
+      }
     }
     if (om > 0 && mass > om && share > 0.01) {
       const severity = (mass - om) / HEAVY_MASS;
@@ -332,6 +460,7 @@ export function scorePlacement(box, ctx) {
   }
   crush *= WEIGHTS.crush;
   fragileUnder *= WEIGHTS.fragileUnder;
+  fragileColumn *= WEIGHTS.fragileColumn;
 
   // Keep the running centre of mass near the trailer centreline.
   const newMass = stats.totalMass + mass;
@@ -346,8 +475,8 @@ export function scorePlacement(box, ctx) {
   );
 
   const terms = {
-    snugness, unsupported, floorBonus, envelope, span, depth,
-    comHeight, crush, fragileUnder, balance
+    snugness, flush, unsupported, floorBonus, envelope, span, depth,
+    comHeight, tipping, crush, fragileUnder, fragileColumn, balance
   };
 
   let score = 0;
@@ -357,9 +486,12 @@ export function scorePlacement(box, ctx) {
     score,
     terms,
     contactRatio: contact.ratio,
+    flushFaces: contact.flushFaces,
     supportRatio: support.ratio,
     onFloor: support.onFloor,
     restsOnFragile: fragileUnder > 0,
+    loadsFragileBelow: fragileColumn > 0,
+    slenderness,
     reasons: wantReasons
       ? explain({ contact, support, terms, mass, fragile })
       : []
@@ -418,11 +550,14 @@ function explain({ contact, support, terms, mass, fragile }) {
   const out = [];
   if (contact.ratio >= 0.45) out.push('Wedged tightly against surrounding cargo');
   else if (contact.ratio >= 0.25) out.push('Flush with nearby cargo');
+  if (contact.flushFaces >= FLUSH_FACE_TARGET) out.push(`Flush on ${contact.flushFaces} faces`);
   if (support.onFloor) out.push('Rests flat on the deck');
   else if (support.ratio >= 0.95) out.push('Fully supported by the cartons below');
   else if (support.ratio >= 0.5) out.push(`${Math.round(support.ratio * 100)}% supported`);
   if (terms.fragileUnder > 0) out.push('Warning: sits on a fragile carton');
+  else if (terms.fragileColumn > 0) out.push('Warning: weight carries down onto a fragile carton');
   else if (mass >= HEAVY_MASS && support.onFloor) out.push('Heavy carton kept on the floor');
+  if (terms.tipping > 0) out.push('Tall for its base — secure it against shifting');
   if (fragile) out.push('Fragile — keep heavy cartons off this one');
   if (terms.envelope <= 0.01 && support.supporters.length) out.push('Fills existing space without extending the load');
   return out;
