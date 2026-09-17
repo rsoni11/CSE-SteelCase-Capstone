@@ -46,6 +46,16 @@ export const BOX_CONFIGS = [
 // US5: boxes at or above this mass are "heavy" for fragile-stacking warnings
 export const HEAVY_BOX_MASS_THRESHOLD = 25;
 
+/**
+ * Top surface of the trailer deck, in feet.
+ *
+ * The floor in TruckScene is a 0.2 ft slab centred at y = 0.1, so its top face
+ * — the surface cargo actually rests on — is at y = 0.2. Several modules used
+ * to hard-code 0.1 here, which let cargo sit 0.1 ft inside the deck and made
+ * floor-contact checks miss boxes that the physics engine had settled at 0.2.
+ */
+export const DECK_SURFACE_Y = 0.2;
+
 // Standard 53' trailer dimensions in feet
 export const TRUCK_DIMENSIONS = {
   length: 53,
@@ -58,3 +68,18 @@ export const TRUCK_VOLUME =
 
 export const MAX_BOXES = 75;
 export const STRESS_TEST_TARGET = 55; // US6
+
+/**
+ * US4 (Rhea): wall thickness used by DragController's boundary clamping.
+ *
+ * The front/back/side walls in TruckScene are 0.2 ft thick BoxGeometry (and
+ * matching 0.1 ft half-thickness static physics bodies), centred on the
+ * truck's outer length/width. Clamping a dragged box only to
+ * TRUCK_DIMENSIONS.length/2 (the wall's centreline) let its edge sit up to
+ * 0.1 ft INSIDE the wall — i.e. clipping through the wall geometry at the
+ * extreme front/back (and left/right) of the trailer. DEFAULT_WALL_INSET_MARGIN
+ * is the distance clampToTruck() pulls the usable envelope in by, so a
+ * clamped box's outer face stops flush against the wall's inner face instead.
+ */
+export const WALL_THICKNESS = 0.2;
+export const DEFAULT_WALL_INSET_MARGIN = WALL_THICKNESS / 2; // 0.1 ft

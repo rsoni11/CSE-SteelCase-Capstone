@@ -14,7 +14,16 @@ export function initScene({
   setIsLoading,
   setIsBoxDragging,
   saveToHistoryRef,
-  onGroupChanged,    // US6 Rhea — (ids: string[]) => void
+  onGroupChanged,         // US6 Rhea — (ids: string[]) => void
+  onOrientPick,           // (entry, clientX, clientY) => void — double-click orientation widget.
+                          // This was already being passed in by the caller but was never
+                          // destructured/forwarded to DragController, so double-clicking a box
+                          // silently did nothing.
+  afterPositionChanged,   // (mesh) => void — fires after a manual drag places a box. Also never
+                          // wired through; stability + fragile-stacking checks that depend on it
+                          // (US3/US4/US5) never ran for manual drag placements.
+  onLayoutChanged,        // () => void — same story; kept placement suggestions from refreshing
+                          // after a manual drag.
 }) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xf5f5f5);
@@ -231,7 +240,13 @@ export function initScene({
     },
     onPositionChanged: (mesh, oldPos, newPos) => {
       if (saveToHistoryRef.current) saveToHistoryRef.current(mesh, oldPos, newPos);
+      // US4 Rhea: keep stability / fragile-stacking checks and placement
+      // suggestions in sync with manual drag placements, not just spawns
+      // and AI-snap placements.
+      afterPositionChanged?.(mesh);
+      onLayoutChanged?.();
     },
+    onOrientPick,
     onGroupChanged,    // US6 Rhea
   });
 

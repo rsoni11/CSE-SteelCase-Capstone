@@ -6,7 +6,7 @@ export class GhostPreview {
     this.mesh  = null;
   }
 
-  show(position, size, hexColor = '#00ff88') {
+  show(position, size, hexColor = '#00ff88', quaternion = null) {
     this.hide();
 
     const geometry = new THREE.BoxGeometry(size.x, size.y, size.z);
@@ -22,6 +22,7 @@ export class GhostPreview {
 
     this.mesh = new THREE.Mesh(geometry, material);
     this.mesh.position.copy(position);
+    if (quaternion) this.mesh.quaternion.copy(quaternion);
 
     const edgesMaterial = new THREE.LineBasicMaterial({
       color: new THREE.Color(hexColor),

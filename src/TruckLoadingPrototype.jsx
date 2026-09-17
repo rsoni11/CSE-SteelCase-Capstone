@@ -7,22 +7,26 @@ import {
   TRUCK_DIMENSIONS,
   TRUCK_VOLUME,
   MAX_BOXES,
-  STRESS_TEST_TARGET,
-  HEAVY_BOX_MASS_THRESHOLD
+  DECK_SURFACE_Y,
+  STRESS_TEST_TARGET,         // US6 Yash
+  HEAVY_BOX_MASS_THRESHOLD    // US5 Rhea
 } from './constants';
-import { STEELCASE_LOAD_EXAMPLES } from './loadExamples';
+import { STEELCASE_LOAD_EXAMPLES } from './loadExamples';   // US1 Yash
 import { initScene } from './TruckScene';
 import { useHistory } from './useHistory';
-import { FitSuggestionSystem } from './FitSuggestionSystem';
 import { GhostPreview } from './GhostPreview';
-import { StabilitySystem } from './StabilitySystem';           // US3 Rhea
+import { getPlacementSuggestions } from './placementSuggestions';
+import { estimateMass, suggestLoadOrder, makeAABB, withinBounds } from './packingScore';
 import Header from './Header';
 import ControlPanel from './ControlPanel';
 import ControlsGuide from './ControlsGuide';
-import ShipmentSummary from './ShipmentSummary';
+import ShipmentSummary from './ShipmentSummary';             // Becky
+import SessionSummaryModal from './SessionSummaryModal';
 import SessionCompleteScreen from './SessionCompleteScreen';
+import OrientationWidget from './OrientationWidget';
+import { StabilitySystem } from './StabilitySystem';
 
-// ── US5 Rhea: floating FRAGILE sprite ─────────────────────────────────────────
+// ── US5 Rhea: floating FRAGILE sprite ─────────────────────────────────────
 function createFragileLabel(heightFt) {
   const canvas = document.createElement('canvas');
   canvas.width = 256; canvas.height = 64;
@@ -46,56 +50,70 @@ function createFragileLabel(heightFt) {
 }
 
 const TruckLoadingPrototype = () => {
-  // ── Refs ────────────────────────────────────────────────────────────────────
-  const mountRef              = useRef(null);
-  const sceneRef              = useRef(null);
-  const cameraRef             = useRef(null);
-  const rendererRef           = useRef(null);
-  const dragControllerRef     = useRef(null);
-  const cargoRegistryRef      = useRef([]);
-  const saveToHistoryRef      = useRef(null);
-  const physicsEnabledRef     = useRef(true);
-  const physicsApiRef         = useRef(null);
-  const ghostPreviewRef       = useRef(null);
-  const fitSystemRef          = useRef(null);
-  const stabilitySystemRef    = useRef(null);   // US3 Rhea
-  const geometryCacheRef      = useRef(new Map());
-  const edgeCacheRef          = useRef(new Map());
-  const materialCacheRef      = useRef(new Map());
-  const lineMaterialRef       = useRef(new THREE.LineBasicMaterial({ color: 0x000000 }));
-  const fragilePinkLineRef    = useRef(new THREE.LineBasicMaterial({ color: 0xff0066 }));
-  const statsRef              = useRef({ fps: 60, boxCount: 0 });
+  // ── Refs ───────────────────────────────────────────────────────────────────
+  const mountRef           = useRef(null);
+  const sceneRef           = useRef(null);
+  const cameraRef          = useRef(null);
+  const rendererRef        = useRef(null);
+  const dragControllerRef  = useRef(null);
+  const cargoRegistryRef   = useRef([]);
+  const saveToHistoryRef   = useRef(null);
+  const physicsEnabledRef  = useRef(true);
+  const physicsApiRef      = useRef(null);
+  const ghostPreviewRef    = useRef(null);
+  const stabilitySystemRef = useRef(null);
   const initialLoadSnapshotRef = useRef(null);
+  // US4 Rhea: stable ref to the latest checkFragileStacking so the scene-init
+  // effect (which only re-runs when checkStabilityAfterMove changes) can call
+  // an up-to-date version from its afterPositionChanged callback without
+  // needing to tear down and rebuild the THREE scene every time
+  // availableBoxes changes.
+  const checkFragileStackingRef = useRef(null);
+  // US6 Yash: geometry/material caches
+  const geometryCacheRef   = useRef(new Map());
+  const edgeCacheRef       = useRef(new Map());
+  const materialCacheRef   = useRef(new Map());
+  const lineMaterialRef    = useRef(new THREE.LineBasicMaterial({ color: 0x000000 }));
+  const fragilePinkLineRef = useRef(new THREE.LineBasicMaterial({ color: 0xff0066 })); // US5
+  const statsRef           = useRef({ fps: 60, boxCount: 0 });
 
-  // ── State ───────────────────────────────────────────────────────────────────
-  const [boxes, setBoxes]                               = useState([]);
-  const [availableBoxes, setAvailableBoxes]             = useState(BOX_CONFIGS);
-  const [selectedBoxType, setSelectedBoxType]           = useState(BOX_CONFIGS[0]);
-  const [stats, setStats]                               = useState({ fps: 60, boxCount: 0 });
-  const [isLoading, setIsLoading]                       = useState(true);
-  const [isBoxDragging, setIsBoxDragging]               = useState(false);
-  const [suggestion, setSuggestion]                     = useState(null);
-  const [isCalcSuggestion, setIsCalcSuggestion]         = useState(false);
-  const [boxQueue, setBoxQueue]                         = useState([]);
-  const [selectedExampleName, setSelectedExampleName]   = useState('Manual');
-  const [selectedExampleId, setSelectedExampleId]       = useState(null);
-  const [queueSummary, setQueueSummary]                 = useState([]);
-  const [stressResult, setStressResult]                 = useState(null);
-  const [isStressTestRunning, setIsStressTestRunning]   = useState(false);
-  const [activeStopFilter, setActiveStopFilter]         = useState(null);
-  const [showSessionComplete, setShowSessionComplete]   = useState(false);
-  const [fragileWarning, setFragileWarning]             = useState(null);
-  // US3 Rhea: stability
-  const [stabilityWarning, setStabilityWarning]         = useState(null); // { message, status }
-  // US6 Rhea: group selection
-  const [selectedGroupIds, setSelectedGroupIds]         = useState([]);   // array of entry ids
+  // ── State ──────────────────────────────────────────────────────────────────
+  const [boxes, setBoxes]                             = useState([]);
+  const [availableBoxes, setAvailableBoxes]           = useState(BOX_CONFIGS);
+  const [selectedBoxType, setSelectedBoxType]         = useState(BOX_CONFIGS[0]);
+  const [stats, setStats]                             = useState({ fps: 60, boxCount: 0 });
+  const [isLoading, setIsLoading]                     = useState(true);
+  const [isBoxDragging, setIsBoxDragging]             = useState(false);
+  const [suggestion, setSuggestion]                   = useState(null);
+  const [suggestionCandidates, setSuggestionCandidates] = useState([]);
+  const [isCalcSuggestion, setIsCalcSuggestion]       = useState(false);
+  const [layoutVersion, setLayoutVersion]             = useState(0);
+  // US1 Yash: load examples + queue
+  const [boxQueue, setBoxQueue]                       = useState([]);
+  const [selectedExampleName, setSelectedExampleName] = useState('Manual');
+  const [selectedExampleId, setSelectedExampleId]     = useState(null);
+  const [queueSummary, setQueueSummary]               = useState([]);
+  // US6 Yash: stress test
+  const [stressResult, setStressResult]               = useState(null);
+  const [isStressTestRunning, setIsStressTestRunning] = useState(false);
+  // Becky: stop filter (ShipmentSummary)
+  const [activeStopFilter, setActiveStopFilter]       = useState(null);
+  const [showSessionSummary, setShowSessionSummary]   = useState(false);
+  const [sessionSummaryMetrics, setSessionSummaryMetrics] = useState(null);
+  // US5 Rhea: fragile warning toast
+  const [fragileWarning, setFragileWarning]           = useState(null);
+  const [orientEntry, setOrientEntry]                 = useState(null);
+  const [orientWidgetPos, setOrientWidgetPos]         = useState({ x: 0, y: 0 });
+  const [stabilityWarning, setStabilityWarning]       = useState(null);
+  const [selectedGroupIds, setSelectedGroupIds]       = useState([]);
+  const [showSessionComplete, setShowSessionComplete] = useState(false);
 
-  // ── History ─────────────────────────────────────────────────────────────────
+  // ── History ────────────────────────────────────────────────────────────────
   const { history, historyIndex, saveToHistory, undo, redo, clearHistory } =
     useHistory(cargoRegistryRef, rendererRef, sceneRef, cameraRef);
   saveToHistoryRef.current = saveToHistory;
 
-  // ── Space utilization ────────────────────────────────────────────────────────
+  // ── Space utilization ──────────────────────────────────────────────────────
   const usedVolume = boxes.reduce((total, box) => {
     const pos = box.mesh.position;
     const isInsideTruck =
@@ -111,21 +129,20 @@ const TruckLoadingPrototype = () => {
 
   useEffect(() => { statsRef.current = stats; }, [stats]);
 
-  // ── US5: auto-dismiss fragile warning ──────────────────────────────────────
+  // ── US5 Rhea: auto-dismiss fragile warning after 4 s ─────────────────────
   useEffect(() => {
     if (!fragileWarning) return;
     const t = setTimeout(() => setFragileWarning(null), 4000);
     return () => clearTimeout(t);
   }, [fragileWarning]);
 
-  // ── US3 Rhea: auto-dismiss stability warning ────────────────────────────────
   useEffect(() => {
     if (!stabilityWarning || stabilityWarning.status === 'blocked') return;
     const t = setTimeout(() => setStabilityWarning(null), 5000);
     return () => clearTimeout(t);
   }, [stabilityWarning]);
 
-  // ── Becky: stop-filter box sync ─────────────────────────────────────────────
+  // ── Becky: update selectedBoxType when stop filter changes ────────────────
   const filteredBoxes = activeStopFilter
     ? availableBoxes.filter(box => box.stop === activeStopFilter && !box.isZeroDim)
     : availableBoxes;
@@ -135,12 +152,14 @@ const TruckLoadingPrototype = () => {
       const boxesForStop = availableBoxes.filter(box => box.stop === activeStopFilter && !box.isZeroDim);
       if (boxesForStop.length > 0) setSelectedBoxType(boxesForStop[0]);
       else setSelectedBoxType(null);
-    } else if (availableBoxes.length > 0) {
+    }
+    // When filter cleared, restore first available box
+    else if (availableBoxes.length > 0) {
       setSelectedBoxType(availableBoxes[0]);
     }
   }, [activeStopFilter, availableBoxes]);
 
-  // ── Geometry / material caches ───────────────────────────────────────────────
+  // ── US6 Yash: geometry / material caches ──────────────────────────────────
   const getDimensionKey = (d) => `${d.width.toFixed(3)}-${d.height.toFixed(3)}-${d.depth.toFixed(3)}`;
 
   const getSharedGeometry = (dimensions) => {
@@ -157,6 +176,7 @@ const TruckLoadingPrototype = () => {
     return edgeCacheRef.current.get(key);
   };
 
+  // US5: fragile boxes get pink material, cached separately
   const getSharedMaterial = (boxType) => {
     const isFragile = boxType.fragile ?? false;
     const key = isFragile ? `fragile-${boxType.color}` : `${boxType.color}`;
@@ -179,19 +199,30 @@ const TruckLoadingPrototype = () => {
     fragilePinkLineRef.current?.dispose();
   };
 
-  // ── US1 Yash: load-example helpers ──────────────────────────────────────────
-  const mapSteelcaseBoxToRuntimeType = (exampleId, boxDef, index) => ({
-    id:         `${exampleId}-${boxDef.typeId}-${index}`,
-    label:      boxDef.label,
-    color:      boxDef.color,
-    dimensions: {
+  // ── US1 Yash: load-example helpers ────────────────────────────────────────
+  const mapSteelcaseBoxToRuntimeType = (exampleId, boxDef, index) => {
+    const dimensions = {
       width:  boxDef.dimensionsInches.width  / 12,
       height: boxDef.dimensionsInches.height / 12,
       depth:  boxDef.dimensionsInches.depth  / 12
-    },
-    physics: { mass: 20, friction: 0.9, restitution: 0.0 },
-    fragile: boxDef.fragile ?? false
-  });
+    };
+    return {
+      id:    `${exampleId}-${boxDef.typeId}-${index}`,
+      label: boxDef.label,
+      color: boxDef.color,
+      dimensions,
+      // Estimate from volume when the dataset carries no weight — a flat 20 lb
+      // for every carton made the weight-aware ranking meaningless.
+      physics: {
+        mass: boxDef.mass ?? estimateMass({
+          x: dimensions.width, y: dimensions.height, z: dimensions.depth
+        }),
+        friction: 0.9,
+        restitution: 0.0
+      },
+      fragile: boxDef.fragile ?? false  // US5
+    };
+  };
 
   const buildQueueFromExample = useCallback((example) => {
     const queue = [];
@@ -211,39 +242,145 @@ const TruckLoadingPrototype = () => {
     return Array.from(grouped.values());
   }, []);
 
-  // ── Scene init ───────────────────────────────────────────────────────────────
+  const checkStabilityAfterMove = useCallback((entry) => {
+    if (!stabilitySystemRef.current) return;
+    const result = stabilitySystemRef.current.evaluate(
+      entry.mesh.position,
+      entry.size,
+      entry.mesh
+    );
+    if (result.status === 'ok') {
+      setStabilityWarning(null);
+    } else {
+      setStabilityWarning({ message: result.message, status: result.status });
+    }
+  }, []);
+
+  const checkStabilityOnPlace = useCallback((pos, size) => {
+    if (!stabilitySystemRef.current) return true;
+    const result = stabilitySystemRef.current.evaluate(pos, size);
+    if (result.status === 'blocked') {
+      setStabilityWarning({ message: result.message, status: 'blocked' });
+      return false;
+    }
+    if (result.status === 'warn') {
+      setStabilityWarning({ message: result.message, status: 'warn' });
+    } else {
+      setStabilityWarning(null);
+    }
+    return true;
+  }, []);
+
+  // ── Scene init ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!mountRef.current) return;
     const { scene, camera, renderer, dragController, cleanup } = initScene({
-      mountEl:          mountRef.current,
-      cargoRegistry:    cargoRegistryRef.current,
-      physicsEnabledRef, physicsApiRef, setStats, setIsLoading, setIsBoxDragging, saveToHistoryRef,
-      onGroupChanged:   (ids) => setSelectedGroupIds([...ids]),  // US6 Rhea
+      mountEl: mountRef.current,
+      cargoRegistry: cargoRegistryRef.current,
+      physicsEnabledRef,
+      physicsApiRef,
+      setStats,
+      setIsLoading,
+      setIsBoxDragging,
+      saveToHistoryRef,
+      onLayoutChanged: () => setLayoutVersion(prev => prev + 1),
+      onOrientPick: (entry, cx, cy) => {
+        setOrientEntry(entry);
+        setOrientWidgetPos({ x: cx, y: cy });
+      },
+      onGroupChanged: (ids) => setSelectedGroupIds([...ids]),
+      afterPositionChanged: (mesh) => {
+        const entry = cargoRegistryRef.current.find(e => e.mesh === mesh);
+        if (!entry) return;
+        checkStabilityAfterMove(entry);
+        // US4 Rhea (Task 3): the fragile-stacking warning previously only
+        // fired on spawn and on AI "Snap to Suggestion" — a box manually
+        // dragged into a stacking position never re-checked. TruckScene now
+        // forwards afterPositionChanged from DragController's onPositionChanged,
+        // so this fires for manual drag placements too.
+        checkFragileStackingRef.current?.(entry);
+      },
     });
     sceneRef.current           = scene;
     cameraRef.current          = camera;
     rendererRef.current        = renderer;
     dragControllerRef.current  = dragController;
     ghostPreviewRef.current    = new GhostPreview(scene);
-    fitSystemRef.current       = new FitSuggestionSystem(cargoRegistryRef.current);
-    stabilitySystemRef.current = new StabilitySystem(cargoRegistryRef.current); // US3 Rhea
+    stabilitySystemRef.current = new StabilitySystem(cargoRegistryRef.current);
 
     return () => {
       ghostPreviewRef.current?.hide();
+      stabilitySystemRef.current = null;
       cleanup();
       disposeSharedResources();
     };
-  }, []);
+  }, [checkStabilityAfterMove]);
 
   // US1: auto-select first load example on mount
   useEffect(() => {
     if (STEELCASE_LOAD_EXAMPLES.length > 0 && !selectedExampleId)
       handleLoadExampleSelect(STEELCASE_LOAD_EXAMPLES[0].id);
-  }, [selectedExampleId]);
+  }, []);
 
-  useEffect(() => { ghostPreviewRef.current?.hide(); setSuggestion(null); }, [selectedBoxType]);
+  const refreshPlacementSuggestions = useCallback((showNoFitAlert = false) => {
+    if (!ghostPreviewRef.current) return;
 
-  // ── Camera View ──────────────────────────────────────────────────────────────
+    // The ghost must describe the carton "Snap Last Box" will actually move —
+    // otherwise we were ranking spots for the NEXT queued SKU and then snapping
+    // a different box into them (and overwriting its collision size to match).
+    // The target is also excluded from the obstacle set: with it left in, every
+    // suggestion had to dodge the box's own spawn position, which is what
+    // scattered cartons down the trailer instead of packing them together.
+    const target = cargoRegistryRef.current[cargoRegistryRef.current.length - 1] ?? null;
+    const source = target ?? selectedBoxType;
+
+    if (!source) {
+      ghostPreviewRef.current.hide();
+      setSuggestionCandidates([]);
+      setSuggestion(null);
+      return;
+    }
+
+    const dims = target ? target.dimensions : selectedBoxType.dimensions;
+    const size = { x: dims.width, y: dims.height, z: dims.depth };
+    const ghostColor = target
+      ? (target.baseMaterial?.color
+          ? `#${target.baseMaterial.color.getHexString()}`
+          : '#00ff88')
+      : selectedBoxType.color;
+
+    const candidates = getPlacementSuggestions(size, cargoRegistryRef.current, 3, {
+      mass: source.physics?.mass ?? estimateMass(size),
+      fragile: source.fragile ?? false,
+      exclude: target ? [target] : []
+    });
+
+    setSuggestionCandidates(candidates);
+    const best = candidates[0] ?? null;
+    setSuggestion(
+      best
+        ? { position: best.position, size: best.size, quaternion: best.quaternion }
+        : null
+    );
+
+    if (best) {
+      ghostPreviewRef.current.show(
+        best.position,
+        best.size,
+        ghostColor,
+        best.quaternion
+      );
+    } else {
+      ghostPreviewRef.current.hide();
+      if (showNoFitAlert) alert('No valid placement found — the truck may be full!');
+    }
+  }, [selectedBoxType]);
+
+  useEffect(() => {
+    refreshPlacementSuggestions(false);
+  }, [selectedBoxType, layoutVersion, refreshPlacementSuggestions]);
+
+  // ── Camera View ────────────────────────────────────────────────────────────
   const handleCameraView = (view) => {
     if (!cameraRef.current) return;
     const c = cameraRef.current;
@@ -253,7 +390,7 @@ const TruckLoadingPrototype = () => {
     else                      c.position.set(20, 25, 40);
   };
 
-  // ── Create Physics Body ───────────────────────────────────────────────────────
+  // ── Create Physics Body ────────────────────────────────────────────────────
   const createBoxBody = (boxType, boxMesh) => {
     const physicsApi = physicsApiRef.current;
     if (!physicsApi?.world) return null;
@@ -275,22 +412,23 @@ const TruckLoadingPrototype = () => {
     body.quaternion.set(boxMesh.quaternion.x, boxMesh.quaternion.y, boxMesh.quaternion.z, boxMesh.quaternion.w);
     body.fixedRotation = false;
     body.updateMassProperties();
-    body.angularFactor.set(0.08, 1.0, 0.08);
+    // Middle ground: allow tilt/roll without wild spinning (was 1,1,1).
+    body.angularFactor.set(0.45, 1, 0.45);
     body.angularVelocity.set(0, 0, 0);
     body.velocity.set(0, 0, 0);
     physicsApi.world.addBody(body);
     return body;
   };
 
-  // ── Becky: CSV upload ─────────────────────────────────────────────────────────
+  // ── Becky: enhanced CSV upload with stop/dimString/isZeroDim/availableQty ─
   const handleCSVUpload = (event) => {
     event?.preventDefault();
     const file = event.dataTransfer ? event.dataTransfer.files[0] : event.target.files[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (e) => {
-      const text    = e.target.result;
-      const lines   = text.split(/\r?\n|\r/).map(l => l.trim()).filter(l => l);
+      const text = e.target.result;
+      const lines = text.split(/\r?\n|\r/).map(l => l.trim()).filter(l => l);
       if (lines.length < 2) { alert('This CSV file is empty!'); return; }
       const headers = lines[0].split(',').map(h => h.trim());
       const lenIdx  = headers.indexOf('Length');
@@ -311,7 +449,9 @@ const TruckLoadingPrototype = () => {
           const w        = parseFloat(cols[widIdx])  || 0;
           const h        = parseFloat(cols[hgtIdx])  || 0;
           const isZeroDim = l === 0 && w === 0 && h === 0;
+          const wgtIdx   = headers.indexOf('Weight');
           const qty      = qtyIdx  !== -1 ? parseInt(cols[qtyIdx])  || 1 : 1;
+          const rowWeight = wgtIdx !== -1 ? parseFloat(cols[wgtIdx]) || 0 : 0;
           const stopVal  = stopIdx !== -1 && cols[stopIdx] ? cols[stopIdx].replace(/"/g, '').trim() : 'Unassigned';
           const dimString = isZeroDim ? `0″ × 0″ × 0″` : `${l}″ × ${w}″ × ${h}″`;
           const groupKey  = `${stopVal}_${dimString}`;
@@ -325,7 +465,15 @@ const TruckLoadingPrototype = () => {
               isZeroDim,
               availableQty: 0,
               stop:         stopVal,
-              physics:      { mass: 20, friction: 0.9, restitution: 0.0 },
+              // Use the CSV's Weight column when present, else estimate from
+              // volume. A flat 20 lb made weight-aware ranking meaningless.
+              physics: {
+                mass: rowWeight > 0
+                  ? rowWeight
+                  : estimateMass({ x: l / 12, y: h / 12, z: w / 12 }),
+                friction: 0.9,
+                restitution: 0.0
+              },
               fragile:      false
             };
           }
@@ -347,7 +495,7 @@ const TruckLoadingPrototype = () => {
     if (event.target?.value) event.target.value = null;
   };
 
-  // ── US5 Rhea: fragile stacking check ─────────────────────────────────────────
+  // ── US5 Rhea: check if a newly-placed heavy box sits on a fragile one ─────
   const checkFragileStacking = useCallback((newEntry) => {
     const isHeavy = (newEntry.physics?.mass ?? 0) >= HEAVY_BOX_MASS_THRESHOLD;
     if (!isHeavy) return;
@@ -368,52 +516,29 @@ const TruckLoadingPrototype = () => {
     }
   }, [availableBoxes]);
 
-  // ── US3 Rhea: stability check on drag-end ────────────────────────────────────
-  // Called from DragController's onPositionChanged callback (wired below in addBoxFromType)
-  const checkStabilityAfterMove = useCallback((entry) => {
-    if (!stabilitySystemRef.current) return;
-    const result = stabilitySystemRef.current.evaluate(
-      entry.mesh.position,
-      entry.size,
-      entry.mesh   // exclude self
-    );
-    if (result.status === 'ok') {
-      setStabilityWarning(null);
-    } else {
-      setStabilityWarning({ message: result.message, status: result.status });
-    }
-  }, []);
+  // US4 Rhea (Task 3): keep a stable ref to the latest checkFragileStacking so
+  // the scene-init effect's afterPositionChanged callback (created once, and
+  // only recreated when checkStabilityAfterMove changes) always calls the
+  // current version — without needing to add checkFragileStacking to that
+  // effect's dependency array, which would tear down and rebuild the entire
+  // THREE/cannon scene every time availableBoxes changes.
+  useEffect(() => {
+    checkFragileStackingRef.current = checkFragileStacking;
+  }, [checkFragileStacking]);
 
-  // ── US3 Rhea: stability check on placement ───────────────────────────────────
-  // Returns false and shows a blocked toast if too unsupported.
-  const checkStabilityOnPlace = useCallback((pos, size) => {
-    if (!stabilitySystemRef.current) return true;
-    const result = stabilitySystemRef.current.evaluate(pos, size);
-    if (result.status === 'blocked') {
-      setStabilityWarning({ message: result.message, status: 'blocked' });
-      return false; // block placement
-    }
-    if (result.status === 'warn') {
-      setStabilityWarning({ message: result.message, status: 'warn' });
-    } else {
-      setStabilityWarning(null);
-    }
-    return true; // allow placement
-  }, []);
-
-  // ── Core box spawner ──────────────────────────────────────────────────────────
+  // ── US6 Yash + US5 Rhea: core box spawner ─────────────────────────────────
   const addBoxFromType = useCallback((boxType) => {
     if (!sceneRef.current || !boxType) return false;
     if (cargoRegistryRef.current.length >= MAX_BOXES) {
       alert(`Maximum ${MAX_BOXES} boxes reached`); return false;
     }
-    const isFragile    = boxType.fragile ?? false;
-    const boxGeometry  = getSharedGeometry(boxType.dimensions);
-    const boxMaterial  = getSharedMaterial(boxType);
-    const box          = new THREE.Mesh(boxGeometry, boxMaterial);
-    const currentCount = cargoRegistryRef.current.length;
+    const isFragile      = boxType.fragile ?? false;
+    const boxGeometry    = getSharedGeometry(boxType.dimensions);
+    const boxMaterial    = getSharedMaterial(boxType);
+    const box            = new THREE.Mesh(boxGeometry, boxMaterial);
+    const currentCount   = cargoRegistryRef.current.length;
 
-    // Wide-grid spawn
+    // Wide-grid spawn (US6)
     const halfLen = TRUCK_DIMENSIONS.length / 2;
     const halfW   = TRUCK_DIMENSIONS.width  / 2;
     const marginX = 3.2, marginZ = 0.85;
@@ -427,8 +552,17 @@ const TruckLoadingPrototype = () => {
     const spawnX  = -halfLen + marginX + (col + 0.5) * (usableX / COLS_X) + layer * 0.35;
     const spawnZ  = -halfW   + marginZ + (row + 0.5) * (usableZ / ROWS_Z);
 
+    // Lay long-thin parcels flat
     const isLongAndThin = boxType.dimensions.height > 2.5 && Math.min(boxType.dimensions.width, boxType.dimensions.depth) < 1.0;
     if (isLongAndThin) box.quaternion.setFromEuler(new THREE.Euler(0, 0, Math.PI / 2));
+
+    // entry.size must be the WORLD-axis-aligned extent (see CollisionSystem /
+    // DragController). Turning the parcel 90° about Z swaps its width and
+    // height in world space; storing the unrotated dimensions here gave every
+    // 48" parcel the wrong collision bounds.
+    const worldSize = isLongAndThin
+      ? { x: boxType.dimensions.height, y: boxType.dimensions.width, z: boxType.dimensions.depth }
+      : { x: boxType.dimensions.width, y: boxType.dimensions.height, z: boxType.dimensions.depth };
 
     box.position.set(spawnX, 8, spawnZ);
     box.updateMatrixWorld(true);
@@ -437,13 +571,35 @@ const TruckLoadingPrototype = () => {
     if (layer > 0) box.position.y += layer * 1.15;
     box.updateMatrixWorld(true);
 
-    box.castShadow    = currentCount < 30;
+    // The spawn grid is fixed and was not collision-checked. Once cargo has
+    // been packed together (by AI Best Fit, or by hand) a later slot can land
+    // *inside* an already-placed carton; the solver then ejects both, which
+    // showed up as interpenetrating and toppled boxes. Rest the new carton on
+    // top of whatever already occupies its column instead.
+    const spawnBox = new THREE.Box3().setFromObject(box);
+    let columnTop = DECK_SURFACE_Y;
+    for (const other of cargoRegistryRef.current) {
+      const o = makeAABB(other.mesh.position, other.size);
+      if (spawnBox.min.x < o.max.x && spawnBox.max.x > o.min.x &&
+          spawnBox.min.z < o.max.z && spawnBox.max.z > o.min.z) {
+        columnTop = Math.max(columnTop, o.max.y);
+      }
+    }
+    const clearance = columnTop + 0.02 - spawnBox.min.y;
+    if (clearance > 0) {
+      box.position.y += clearance;
+      box.updateMatrixWorld(true);
+    }
+
+    box.castShadow    = currentCount < 30; // US6: skip distant shadow casters
     box.receiveShadow = true;
 
+    // US5: pink edge lines for fragile boxes
     box.add(new THREE.LineSegments(
       getSharedEdges(boxType.dimensions),
       isFragile ? fragilePinkLineRef.current : lineMaterialRef.current
     ));
+    // US5: floating FRAGILE sprite
     if (isFragile) box.add(createFragileLabel(boxType.dimensions.height));
 
     sceneRef.current.add(box);
@@ -455,19 +611,21 @@ const TruckLoadingPrototype = () => {
       label:        boxType.label,
       mesh:         box,
       body,
-      size:         { x: boxType.dimensions.width, y: boxType.dimensions.height, z: boxType.dimensions.depth },
+      size:         { ...worldSize },
       dimensions:   { ...boxType.dimensions },
       physics:      { ...boxType.physics },
-      fragile:      isFragile,
+      fragile:      isFragile,   // US5
       baseMaterial: boxMaterial
     };
 
     cargoRegistryRef.current.push(entry);
     setBoxes(prev => [...prev, { id: entry.id, mesh: box, type: boxType.id }]);
     setStats(prev => ({ ...prev, boxCount: prev.boxCount + 1 }));
+    setLayoutVersion(prev => prev + 1);
     ghostPreviewRef.current?.hide();
     setSuggestion(null);
 
+    // US5: check stacking after state settles
     setTimeout(() => checkFragileStacking(entry), 100);
     return true;
   }, [checkFragileStacking]);
@@ -476,13 +634,13 @@ const TruckLoadingPrototype = () => {
     addBoxFromType(selectedBoxType);
   }, [selectedBoxType, addBoxFromType]);
 
-  // ── Export Load Plan ──────────────────────────────────────────────────────────
+  // ── Export Load Plan ───────────────────────────────────────────────────────
   const exportLoadPlan = () => {
     const boxesPayload = cargoRegistryRef.current.map((entry, index) => {
       const volume = entry.dimensions.width * entry.dimensions.height * entry.dimensions.depth;
       return {
         index: index + 1, id: entry.id, type: entry.type, label: entry.label,
-        fragile: entry.fragile ?? false,
+        fragile: entry.fragile ?? false,  // US5
         dimensions: {
           width:  Number(entry.dimensions.width.toFixed(3)),
           height: Number(entry.dimensions.height.toFixed(3)),
@@ -519,9 +677,9 @@ const TruckLoadingPrototype = () => {
     document.body.removeChild(link); URL.revokeObjectURL(url);
   };
 
-  // ── Clear Boxes ───────────────────────────────────────────────────────────────
+  // ── Clear Boxes ────────────────────────────────────────────────────────────
   const clearBoxes = useCallback(({ clearQueue = true } = {}) => {
-    dragControllerRef.current?.clearGroup?.();            // US6 Rhea
+    dragControllerRef.current?.clearRegistry();
     const physicsWorld = physicsApiRef.current?.world;
     [...cargoRegistryRef.current].forEach(e => {
       if (e?.body && physicsWorld) physicsWorld.removeBody(e.body);
@@ -529,14 +687,16 @@ const TruckLoadingPrototype = () => {
       e.mesh?.clear();
     });
     cargoRegistryRef.current.length = 0;
-    dragControllerRef.current?.clearRegistry();
     ghostPreviewRef.current?.hide();
     setSuggestion(null);
+    setSuggestionCandidates([]);
     setBoxes([]);
     setStats(prev => ({ ...prev, boxCount: 0 }));
     setFragileWarning(null);
-    setStabilityWarning(null);                             // US3 Rhea
-    setSelectedGroupIds([]);                               // US6 Rhea
+    setStabilityWarning(null);
+    setOrientEntry(null);
+    setSelectedGroupIds([]);
+    setLayoutVersion(prev => prev + 1);
     if (clearQueue) {
       setBoxQueue([]); setQueueSummary([]);
       setSelectedExampleName('Manual'); setSelectedExampleId(null);
@@ -544,7 +704,7 @@ const TruckLoadingPrototype = () => {
     clearHistory();
   }, [clearHistory]);
 
-  // ── US1 Yash: load example select ─────────────────────────────────────────────
+  // ── US1 Yash: load example select ─────────────────────────────────────────
   const handleLoadExampleSelect = useCallback((exampleId) => {
     const example = STEELCASE_LOAD_EXAMPLES.find(e => e.id === exampleId);
     if (!example) return;
@@ -560,7 +720,7 @@ const TruckLoadingPrototype = () => {
     setActiveStopFilter(null);
   }, [buildQueueFromExample, buildQueueSummary, clearBoxes]);
 
-  // ── US1 Yash: add next queued box ─────────────────────────────────────────────
+  // ── US1 Yash: add next queued box ─────────────────────────────────────────
   const addNextQueuedBox = useCallback(() => {
     if (boxQueue.length === 0) { addBox(); return; }
     const nextType = boxQueue[0];
@@ -574,7 +734,20 @@ const TruckLoadingPrototype = () => {
     }
   }, [boxQueue, addBox, addBoxFromType, buildQueueSummary]);
 
-  // ── Stress test ───────────────────────────────────────────────────────────────
+  // Reorder the pending queue heaviest-first, fragile last. Arrival order — not
+  // the scoring function — is what strands heavy cartons near the roof, because
+  // by the time they show up the deck is already full.
+  const sortQueueForPacking = useCallback(() => {
+    setBoxQueue(prev => {
+      if (prev.length < 2) return prev;
+      const sorted = suggestLoadOrder(prev);
+      setQueueSummary(buildQueueSummary(sorted));
+      setSelectedBoxType(sorted[0]);
+      return sorted;
+    });
+  }, [buildQueueSummary]);
+
+  // ── US6 Yash: stress test ──────────────────────────────────────────────────
   const runStressTest = useCallback(() => {
     if (isStressTestRunning) return;
     setIsStressTestRunning(true); setStressResult(null);
@@ -602,18 +775,54 @@ const TruckLoadingPrototype = () => {
     requestAnimationFrame(spawnStep);
   }, [availableBoxes, boxQueue, isStressTestRunning, addBoxFromType, clearBoxes]);
 
-  // ── US2 Rhea: complete session ─────────────────────────────────────────────────
-  const handleCompleteSession = useCallback(() => {
-    initialLoadSnapshotRef.current = cargoRegistryRef.current.map(e => ({
-      type:       e.type, fragile: e.fragile, label: e.label,
-      position:   e.mesh.position.clone(), rotation: e.mesh.rotation.clone(),
-      dimensions: { ...e.dimensions }, physics: { ...e.physics },
-      color:      e.baseMaterial?.color ? '#' + e.baseMaterial.color.getHexString() : '#888'
-    }));
-    setShowSessionComplete(true);
+  const computeSessionSummaryMetrics = useCallback(() => {
+    const entries = cargoRegistryRef.current;
+    if (!entries.length) return null;
+
+    const cargoVolume = entries.reduce(
+      (total, e) => total + (e.dimensions.width * e.dimensions.height * e.dimensions.depth),
+      0
+    );
+    const optimalSpaceUsedPct = (cargoVolume / TRUCK_VOLUME) * 100;
+
+    const minX = Math.min(...entries.map(e => e.mesh.position.x - e.size.x / 2));
+    const maxX = Math.max(...entries.map(e => e.mesh.position.x + e.size.x / 2));
+    const minY = Math.min(...entries.map(e => e.mesh.position.y - e.size.y / 2));
+    const maxY = Math.max(...entries.map(e => e.mesh.position.y + e.size.y / 2));
+    const minZ = Math.min(...entries.map(e => e.mesh.position.z - e.size.z / 2));
+    const maxZ = Math.max(...entries.map(e => e.mesh.position.z + e.size.z / 2));
+
+    const arrangementVolume = Math.max(0, (maxX - minX) * (maxY - minY) * (maxZ - minZ));
+    const userSpaceUsedPct = Math.min(100, (arrangementVolume / TRUCK_VOLUME) * 100);
+    const wastedSpacePct = Math.max(0, ((arrangementVolume - cargoVolume) / TRUCK_VOLUME) * 100);
+    const efficiencyDeltaPct = optimalSpaceUsedPct - userSpaceUsedPct;
+
+    return {
+      totalBoxes: entries.length,
+      optimalSpaceUsedPct,
+      userSpaceUsedPct,
+      wastedSpacePct,
+      efficiencyDeltaPct
+    };
   }, []);
 
-  // ── US2 Rhea: try again ────────────────────────────────────────────────────────
+  const handleFinishSession = useCallback(() => {
+    const metrics = computeSessionSummaryMetrics();
+    if (!metrics) return;
+    initialLoadSnapshotRef.current = cargoRegistryRef.current.map(e => ({
+      type: e.type,
+      fragile: e.fragile,
+      label: e.label,
+      position: e.mesh.position.clone(),
+      rotation: e.mesh.rotation.clone(),
+      dimensions: { ...e.dimensions },
+      physics: { ...e.physics },
+      color: e.baseMaterial?.color ? '#' + e.baseMaterial.color.getHexString() : '#888'
+    }));
+    setSessionSummaryMetrics(metrics);
+    setShowSessionSummary(true);
+  }, [computeSessionSummaryMetrics]);
+
   const handleTryAgain = useCallback(() => {
     const snapshot = initialLoadSnapshotRef.current;
     clearBoxes({ clearQueue: false });
@@ -625,18 +834,24 @@ const TruckLoadingPrototype = () => {
         const boxType = { id: type, label, color, dimensions, physics, fragile: fragile ?? false };
         const isFragile = fragile ?? false;
         const mesh = new THREE.Mesh(getSharedGeometry(dimensions), getSharedMaterial(boxType));
-        mesh.position.copy(position); mesh.rotation.copy(rotation);
-        mesh.castShadow = true; mesh.receiveShadow = true;
+        mesh.position.copy(position);
+        mesh.rotation.copy(rotation);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
         mesh.add(new THREE.LineSegments(getSharedEdges(dimensions), isFragile ? fragilePinkLineRef.current : lineMaterialRef.current));
         if (isFragile) mesh.add(createFragileLabel(dimensions.height));
         sceneRef.current.add(mesh);
         const body = createBoxBody(boxType, mesh);
         const entry = {
           id: `${type}-tryagain-${Date.now()}-${Math.random()}`,
-          type, label, mesh, body,
-          size:         { x: dimensions.width, y: dimensions.height, z: dimensions.depth },
-          dimensions:   { ...dimensions }, physics: { ...physics },
-          fragile:      isFragile,
+          type,
+          label,
+          mesh,
+          body,
+          size: { x: dimensions.width, y: dimensions.height, z: dimensions.depth },
+          dimensions: { ...dimensions },
+          physics: { ...physics },
+          fragile: isFragile,
           baseMaterial: getSharedMaterial(boxType)
         };
         cargoRegistryRef.current.push(entry);
@@ -646,47 +861,116 @@ const TruckLoadingPrototype = () => {
     }, 50);
   }, [clearBoxes]);
 
-  // ── AI Best Fit ────────────────────────────────────────────────────────────────
+  const handleClearGroup = useCallback(() => {
+    dragControllerRef.current?.clearGroup();
+    setSelectedGroupIds([]);
+  }, []);
+
+  // ── AI Best Fit ────────────────────────────────────────────────────────────
   const handleSuggestPlacement = useCallback(() => {
-    if (!fitSystemRef.current || !ghostPreviewRef.current || !sceneRef.current || !selectedBoxType) return;
+    if (!selectedBoxType) return;
     setIsCalcSuggestion(true);
-    ghostPreviewRef.current.hide(); setSuggestion(null);
     setTimeout(() => {
-      const size = { x: selectedBoxType.dimensions.width, y: selectedBoxType.dimensions.height, z: selectedBoxType.dimensions.depth };
-      const pos  = fitSystemRef.current.findBestFit(size);
-      if (pos) { ghostPreviewRef.current.show(pos, size, selectedBoxType.color); setSuggestion({ position: pos, size }); }
-      else { setSuggestion(null); alert('No valid placement found — the truck may be full!'); }
+      refreshPlacementSuggestions(true);
       setIsCalcSuggestion(false);
     }, 30);
-  }, [selectedBoxType]);
+  }, [selectedBoxType, refreshPlacementSuggestions]);
 
   const handleSnapToSuggestion = useCallback(() => {
     if (!suggestion || boxes.length === 0) return;
     const lastEntry = cargoRegistryRef.current[cargoRegistryRef.current.length - 1];
     if (!lastEntry) return;
 
-    // US3 Rhea: block snap if the suggested position is too unsupported
-    if (!checkStabilityOnPlace(suggestion.position, suggestion.size)) return;
+    // The stored suggestion was computed when the layout last changed, but the
+    // physics world keeps settling afterwards. Applying a stale spot dropped
+    // cartons into neighbours that had since drifted, so re-solve against the
+    // current positions and fall back to the stored spot only if nothing fits.
+    const dims = lastEntry.dimensions;
+    const fresh = getPlacementSuggestions(
+      { x: dims.width, y: dims.height, z: dims.depth },
+      cargoRegistryRef.current,
+      1,
+      {
+        mass: lastEntry.physics?.mass ?? estimateMass(lastEntry.size),
+        fragile: lastEntry.fragile ?? false,
+        exclude: [lastEntry]
+      }
+    )[0];
+
+    // Do NOT fall back to the stored suggestion: it was ranked for whichever
+    // carton was last previewed, so applying it here placed 48" parcels in a
+    // pose that was never validated for them — through the trailer wall and
+    // under the deck. If nothing fits this carton right now, say so.
+    if (!fresh) {
+      alert('No valid placement found for this box — try rotating it or freeing up space.');
+      return;
+    }
+    const target = fresh;
+
+    // Belt-and-braces: never commit a pose that is not physically inside the
+    // trailer. The search already guarantees this, but a silent bad placement
+    // (a 4 ft parcel through the sidewall) is far worse than a refused click.
+    if (!withinBounds(target.position, target.size, TRUCK_DIMENSIONS)) {
+      console.warn('Rejected out-of-bounds suggestion', target.position, target.size);
+      alert('No valid placement found for this box — try rotating it or freeing up space.');
+      return;
+    }
+
+    if (!checkStabilityOnPlace(target.position, target.size)) return;
 
     const oldPos = lastEntry.mesh.position.clone();
-    lastEntry.mesh.position.copy(suggestion.position);
-    lastEntry.size.x = suggestion.size.x; lastEntry.size.y = suggestion.size.y; lastEntry.size.z = suggestion.size.z;
+    lastEntry.mesh.position.copy(target.position);
+    if (target.quaternion) lastEntry.mesh.quaternion.copy(target.quaternion);
+    lastEntry.size.x = target.size.x; lastEntry.size.y = target.size.y; lastEntry.size.z = target.size.z;
     if (lastEntry.body) {
-      lastEntry.body.position.set(suggestion.position.x, suggestion.position.y, suggestion.position.z);
-      lastEntry.body.velocity.set(0, 0, 0); lastEntry.body.angularVelocity.set(0, 0, 0); lastEntry.body.wakeUp();
+      lastEntry.body.position.set(target.position.x, target.position.y, target.position.z);
+      lastEntry.body.quaternion.set(
+        lastEntry.mesh.quaternion.x,
+        lastEntry.mesh.quaternion.y,
+        lastEntry.mesh.quaternion.z,
+        lastEntry.mesh.quaternion.w
+      );
+      lastEntry.body.velocity.set(0, 0, 0);
+      lastEntry.body.angularVelocity.set(0, 0, 0);
+      // Put it to sleep rather than waking it: the placement is already a
+      // resting, collision-free pose, so handing it to the solver awake just
+      // let it be nudged off the stack and settle somewhere slightly wrong.
+      // Contact from a dragged carton still wakes it normally.
+      lastEntry.body.sleep();
     }
-    saveToHistoryRef.current?.(lastEntry.mesh, oldPos, suggestion.position);
-    ghostPreviewRef.current?.hide(); setSuggestion(null);
+    saveToHistoryRef.current?.(lastEntry.mesh, oldPos, target.position);
+    setLayoutVersion(prev => prev + 1);
+    ghostPreviewRef.current?.hide();
+    setSuggestion(null);
+    setSuggestionCandidates([]);
+    // US4 Rhea (Task 3): fragile-stacking warning must fire for AI-assisted
+    // snap placement too, not just manual drag / initial spawn.
     setTimeout(() => checkFragileStacking(lastEntry), 100);
   }, [suggestion, boxes.length, checkFragileStacking, checkStabilityOnPlace]);
 
-  // ── US6 Rhea: clear group selection ───────────────────────────────────────────
-  const handleClearGroup = useCallback(() => {
-    dragControllerRef.current?.clearGroup();
-    setSelectedGroupIds([]);
+  const handleUndo = useCallback(() => {
+    undo();
+    setTimeout(() => setLayoutVersion(prev => prev + 1), 0);
+  }, [undo]);
+
+  const handleRedo = useCallback(() => {
+    redo();
+    setTimeout(() => setLayoutVersion(prev => prev + 1), 0);
+  }, [redo]);
+
+  const handleRotateBox = useCallback(() => {
+    const dc = dragControllerRef.current;
+    if (!dc) return;
+    if (orientEntry) dc.rotateEntry(orientEntry);
+    else dc.rotateSelected();
+  }, [orientEntry]);
+
+  const syncOrientPhysics = useCallback((entry) => {
+    dragControllerRef.current?.syncBodyWithMesh(entry);
+    setLayoutVersion(prev => prev + 1);
   }, []);
 
-  // ── Render ─────────────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div style={{
       width: '100vw', height: '100vh', margin: 0, padding: 0, overflow: 'hidden',
@@ -712,6 +996,7 @@ const TruckLoadingPrototype = () => {
         </div>
       )}
 
+      {/* Becky: Shipment Summary panel */}
       <ShipmentSummary
         availableBoxes={availableBoxes}
         activeStopFilter={activeStopFilter}
@@ -728,9 +1013,11 @@ const TruckLoadingPrototype = () => {
         exportLoadPlan={exportLoadPlan}
         historyIndex={historyIndex}
         history={history}
-        undo={undo}
-        redo={redo}
+        undo={handleUndo}
+        redo={handleRedo}
         isBoxDragging={isBoxDragging}
+        orientEntry={orientEntry}
+        onRotateBox={handleRotateBox}
         dragControllerRef={dragControllerRef}
         handleCameraView={handleCameraView}
         handleCSVUpload={handleCSVUpload}
@@ -741,6 +1028,7 @@ const TruckLoadingPrototype = () => {
         queueCount={boxQueue.length}
         queueSummary={queueSummary}
         addNextQueuedBox={addNextQueuedBox}
+        sortQueueForPacking={sortQueueForPacking}
         runStressTest={runStressTest}
         isStressTestRunning={isStressTestRunning}
         stressResult={stressResult}
@@ -748,13 +1036,24 @@ const TruckLoadingPrototype = () => {
         onSnapToSuggestion={handleSnapToSuggestion}
         hasSuggestion={!!suggestion}
         isCalcSuggestion={isCalcSuggestion}
+        suggestionCount={suggestionCandidates.length}
+        suggestionReasons={suggestionCandidates[0]?.reasons ?? []}
         activeStopFilter={activeStopFilter}
         setActiveStopFilter={setActiveStopFilter}
-        onCompleteSession={handleCompleteSession}
-        // US6 Rhea: group selection
+        onFinishSession={handleFinishSession}
         selectedGroupCount={selectedGroupIds.length}
         onClearGroup={handleClearGroup}
       />
+
+      {orientEntry && (
+        <OrientationWidget
+          selectedBox={orientEntry}
+          widgetPos={orientWidgetPos}
+          dragControllerRef={dragControllerRef}
+          setSelectedBox={setOrientEntry}
+          onPhysicsSync={syncOrientPhysics}
+        />
+      )}
 
       <ControlsGuide />
 
@@ -776,34 +1075,62 @@ const TruckLoadingPrototype = () => {
         </div>
       )}
 
-      {/* US3 Rhea: load stability warning toast */}
+      <SessionSummaryModal
+        open={showSessionSummary}
+        metrics={sessionSummaryMetrics}
+        onClose={() => setShowSessionSummary(false)}
+        onTryAgain={handleTryAgain}
+        onContinueToGrade={() => {
+          setShowSessionSummary(false);
+          setShowSessionComplete(true);
+        }}
+      />
+
       {stabilityWarning && (
         <div style={{
           position: 'absolute',
           bottom: fragileWarning ? '88px' : '32px',
-          left: '50%', transform: 'translateX(-50%)',
+          left: '50%',
+          transform: 'translateX(-50%)',
           background: stabilityWarning.status === 'blocked'
             ? 'linear-gradient(135deg, #c0392b, #922b21)'
             : 'linear-gradient(135deg, #f39c12, #d68910)',
           color: '#fff',
-          borderRadius: '12px', padding: '14px 24px', fontSize: '14px', fontWeight: 700,
+          borderRadius: '12px',
+          padding: '14px 24px',
+          fontSize: '14px',
+          fontWeight: 700,
           boxShadow: stabilityWarning.status === 'blocked'
             ? '0 6px 24px rgba(192,57,43,0.5)'
             : '0 6px 24px rgba(243,156,18,0.5)',
-          zIndex: 51, maxWidth: '560px', textAlign: 'center', animation: 'toastSlideUp 0.3s ease'
+          zIndex: 51,
+          maxWidth: '560px',
+          textAlign: 'center',
+          animation: 'toastSlideUp 0.3s ease'
         }}>
           {stabilityWarning.message}
           {stabilityWarning.status !== 'blocked' && (
-            <button onClick={() => setStabilityWarning(null)} style={{
-              marginLeft: '16px', background: 'rgba(255,255,255,0.25)', border: 'none',
-              borderRadius: '6px', color: '#fff', padding: '2px 10px', cursor: 'pointer',
-              fontSize: '13px', fontWeight: 700
-            }}>✕</button>
+            <button
+              type="button"
+              onClick={() => setStabilityWarning(null)}
+              style={{
+                marginLeft: '16px',
+                background: 'rgba(255,255,255,0.25)',
+                border: 'none',
+                borderRadius: '6px',
+                color: '#fff',
+                padding: '2px 10px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: 700
+              }}
+            >
+              ✕
+            </button>
           )}
         </div>
       )}
 
-      {/* US2 Rhea: session complete overlay */}
       {showSessionComplete && (
         <SessionCompleteScreen
           usedVolume={usedVolume}

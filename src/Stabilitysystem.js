@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { TRUCK_DIMENSIONS } from './constants';
+import { TRUCK_DIMENSIONS, DECK_SURFACE_Y } from './constants';
 
 // ── US3 Rhea: Load Stability Validation ───────────────────────────────────────
 //
@@ -77,7 +77,7 @@ export class StabilitySystem {
     const myArea    = size.x * size.z;
 
     // ── 1. Truck floor ───────────────────────────────────────────────────────
-    const floorTop = 0.2; // matches the floor body position in TruckScene
+    const floorTop = DECK_SURFACE_Y; // matches the floor body in TruckScene
     if (Math.abs(boxBottom - floorTop) <= CONTACT_EPS) {
       // Sitting on the floor → fully supported
       return 1.0;

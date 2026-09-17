@@ -16,6 +16,8 @@ const ControlPanel = ({
   undo,
   redo,
   isBoxDragging,
+  orientEntry = null,
+  onRotateBox,
   dragControllerRef,
   handleCameraView,
   handleCSVUpload,
@@ -27,6 +29,7 @@ const ControlPanel = ({
   queueCount,
   queueSummary,
   addNextQueuedBox,
+  sortQueueForPacking,
   // US6 Yash
   runStressTest,
   isStressTestRunning,
@@ -36,11 +39,13 @@ const ControlPanel = ({
   onSnapToSuggestion,
   hasSuggestion,
   isCalcSuggestion,
-  // Becky: stop filter
+  suggestionCount = 0,
+  suggestionReasons = [],
   activeStopFilter,
   setActiveStopFilter,
-  // US2 Rhea
-  onCompleteSession
+  onFinishSession,
+  selectedGroupCount = 0,
+  onClearGroup,
 }) => {
   const [isPanelMinimized, setIsPanelMinimized] = useState(false);
   const [panelPosition, setPanelPosition] = useState({ x: 30, y: window.innerHeight - 500 });
@@ -246,6 +251,19 @@ const ControlPanel = ({
                       : ((selectedBoxType?.fragile ? '⚠ Add Fragile Box' : 'Add Box'))))}
           </button>
 
+          {/* Load order — heaviest to the deck first, fragile on top */}
+          {(queueCount ?? 0) > 1 && sortQueueForPacking && (
+            <button
+              type="button"
+              onClick={sortQueueForPacking}
+              title="Reorder the remaining queue: heaviest and bulkiest first, fragile last"
+              style={{ ...btnBase, background: '#ffffff', color: '#004E89',
+                border: '2px solid #004E89', cursor: 'pointer' }}
+            >
+              ⚖ Sort Queue by Weight
+            </button>
+          )}
+
           {/* ── US6 Yash: Stress Test ────────────────────────────────────── */}
           <button onClick={runStressTest} disabled={isStressTestRunning}
             style={{ ...btnBase, background: '#2C3E50', color: '#ffffff', border: 'none',
@@ -286,18 +304,58 @@ const ControlPanel = ({
               ⬇ Snap Last Box to Suggestion
             </button>
             <div style={{ marginTop: '8px', fontSize: '11px', color: hasSuggestion ? '#1AA37A' : '#999', textAlign: 'center', fontStyle: 'italic' }}>
-              {hasSuggestion ? '● Ghost preview visible in truck' : 'Click "Suggest" to find the tightest fit'}
+              {hasSuggestion
+                ? `● Ghost preview visible in truck (${suggestionCount} ranked suggestion${suggestionCount === 1 ? '' : 's'})`
+                : 'No valid recommendation for current box'}
             </div>
+
+            {/* Why this spot — makes the ranking auditable instead of a black box */}
+            {hasSuggestion && suggestionReasons.length > 0 && (
+              <div style={{ marginTop: '8px', background: '#ffffff', border: '1px solid #cbe8dc',
+                borderRadius: '8px', padding: '8px 10px' }}>
+                <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.5px',
+                  color: '#13815f', textTransform: 'uppercase', marginBottom: '4px' }}>
+                  Why this spot
+                </div>
+                {suggestionReasons.map((reason) => (
+                  <div key={reason} style={{ display: 'flex', gap: '6px', fontSize: '11px',
+                    color: reason.startsWith('Warning') ? '#c0392b' : '#495057', lineHeight: 1.5 }}>
+                    <span aria-hidden="true">{reason.startsWith('Warning') ? '⚠' : '✓'}</span>
+                    <span>{reason}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
-          {/* ── US2 Rhea: Complete Session ───────────────────────────────── */}
-          <button onClick={onCompleteSession} disabled={boxes.length === 0}
+          {selectedGroupCount > 0 && (
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              marginBottom: '12px', padding: '10px 12px', background: '#eef2ff',
+              borderRadius: '8px', fontSize: '12px', fontWeight: 600, color: '#4338ca'
+            }}>
+              <span>Group selected: {selectedGroupCount} boxes</span>
+              <button
+                type="button"
+                onClick={onClearGroup}
+                style={{
+                  background: '#ffffff', border: '1px solid #c7d2fe', color: '#4338ca',
+                  borderRadius: '6px', cursor: 'pointer', fontSize: '11px', padding: '4px 10px'
+                }}
+              >
+                Clear
+              </button>
+            </div>
+          )}
+
+          {/* Session summary */}
+          <button type="button" onClick={onFinishSession} disabled={boxes.length === 0}
             style={{ ...btnBase,
               background: boxes.length > 0 ? 'linear-gradient(135deg, #f39c12, #e67e22)' : '#f5f5f5',
               color: boxes.length > 0 ? '#ffffff' : '#aaa', border: 'none',
               cursor: boxes.length === 0 ? 'not-allowed' : 'pointer',
               opacity: boxes.length === 0 ? 0.5 : 1, fontWeight: 700 }}>
-            🏁 Complete Session
+            📊 Finish Session / View Results
           </button>
 
           {/* Clear All */}
@@ -336,12 +394,15 @@ const ControlPanel = ({
             </button>
           </div>
 
-          {/* Rotate Box */}
-          <button onClick={() => dragControllerRef.current?.rotateSelected()} disabled={!isBoxDragging}
+          {/* Rotate Box — while dragging, or when orientation panel is open */}
+          <button
+            type="button"
+            onClick={() => (onRotateBox ? onRotateBox() : dragControllerRef.current?.rotateSelected())}
+            disabled={!isBoxDragging && !orientEntry}
             style={{ ...btnBase, background: '#ffffff',
-              color: isBoxDragging ? '#1AA37A' : '#aaa',
-              border: `2px solid ${isBoxDragging ? '#1AA37A' : '#e0e0e0'}`,
-              cursor: isBoxDragging ? 'pointer' : 'not-allowed', marginBottom: '16px' }}>
+              color: (isBoxDragging || orientEntry) ? '#1AA37A' : '#aaa',
+              border: `2px solid ${(isBoxDragging || orientEntry) ? '#1AA37A' : '#e0e0e0'}`,
+              cursor: (isBoxDragging || orientEntry) ? 'pointer' : 'not-allowed', marginBottom: '16px' }}>
             ↻ Rotate Box 90° (R)
           </button>
 

@@ -17,8 +17,7 @@ export class CollisionSystem {
     return false;
   }
 
-  // ── US6 Rhea: collision check that ignores a whole set of meshes ───────────
-  // Used during group movement so grouped boxes don't collide with each other.
+  // US6 Rhea: collision check that ignores a whole set of meshes (group drag)
   wouldCollideExcluding(movingMesh, testPosition, size, excludeMeshes = []) {
     const a = this.createAABB(size, testPosition);
     for (const other of this.cargoBoxes) {
