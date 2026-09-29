@@ -25,6 +25,7 @@ import SessionSummaryModal from './SessionSummaryModal';
 import SessionCompleteScreen from './SessionCompleteScreen';
 import OrientationWidget from './OrientationWidget';
 import { StabilitySystem } from './StabilitySystem';
+import ImportConfirmModal from './ImportConfirmModal';   // US4 Rhea (Sprint 6 carry-over)
 
 // ── US5 Rhea: floating FRAGILE sprite ─────────────────────────────────────
 function createFragileLabel(heightFt) {
@@ -49,6 +50,35 @@ function createFragileLabel(heightFt) {
   return sprite;
 }
 
+// ── US7 Rhea: floating restriction sprites ────────────────────────────────
+// Same visual language as the FRAGILE label above, in its own color per
+// restriction so a box can carry both without the labels being confused.
+// Concept borrowed from the reference project's per-carton restrictions
+// model (No Stacking / This Side Up), not its code.
+function createRestrictionLabel(heightFt, text, bgColor, yOffset = 0) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256; canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = bgColor;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(4, 4, 248, 56, 10);
+  else ctx.rect(4, 4, 248, 56);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 24px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 128, 32);
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false })
+  );
+  sprite.scale.set(1.2, 0.3, 1);
+  sprite.position.set(0, heightFt / 2 + 0.28 + yOffset, 0);
+  return sprite;
+}
+const createNoStackLabel   = (heightFt, offset) => createRestrictionLabel(heightFt, '🔒 NO STACK', 'rgba(230,126,34,0.9)', offset);
+const createThisSideUpLabel = (heightFt, offset) => createRestrictionLabel(heightFt, '⬆ THIS SIDE UP', 'rgba(41,128,185,0.9)', offset);
+
 const TruckLoadingPrototype = () => {
   // ── Refs ───────────────────────────────────────────────────────────────────
   const mountRef           = useRef(null);
@@ -63,6 +93,12 @@ const TruckLoadingPrototype = () => {
   const ghostPreviewRef    = useRef(null);
   const stabilitySystemRef = useRef(null);
   const initialLoadSnapshotRef = useRef(null);
+  // US4 Rhea: stable ref to the latest checkFragileStacking so the scene-init
+  // effect (which only re-runs when checkStabilityAfterMove changes) can call
+  // an up-to-date version from its afterPositionChanged callback without
+  // needing to tear down and rebuild the THREE scene every time
+  // availableBoxes changes.
+  const checkFragileStackingRef = useRef(null);
   // US6 Yash: geometry/material caches
   const geometryCacheRef   = useRef(new Map());
   const edgeCacheRef       = useRef(new Map());
@@ -101,6 +137,12 @@ const TruckLoadingPrototype = () => {
   const [stabilityWarning, setStabilityWarning]       = useState(null);
   const [selectedGroupIds, setSelectedGroupIds]       = useState([]);
   const [showSessionComplete, setShowSessionComplete] = useState(false);
+
+  // US4 Rhea (Sprint 6 carry-over): Import Confirmation Preview.
+  // Holds the PARSED-BUT-NOT-YET-APPLIED load plan plus the summary shown in
+  // the modal. Nothing in the scene/registry changes until the user confirms
+  // (see applyImportedLoadPlan) — cancelling just clears this back to null.
+  const [importPreview, setImportPreview] = useState(null);
 
   // ── History ────────────────────────────────────────────────────────────────
   const { history, historyIndex, saveToHistory, undo, redo, clearHistory } =
@@ -214,7 +256,8 @@ const TruckLoadingPrototype = () => {
         friction: 0.9,
         restitution: 0.0
       },
-      fragile: boxDef.fragile ?? false  // US5
+      fragile: boxDef.fragile ?? false,  // US5
+      restrictions: boxDef.restrictions ?? {}  // US7: noStack / thisSideUp
     };
   };
 
@@ -285,7 +328,14 @@ const TruckLoadingPrototype = () => {
       onGroupChanged: (ids) => setSelectedGroupIds([...ids]),
       afterPositionChanged: (mesh) => {
         const entry = cargoRegistryRef.current.find(e => e.mesh === mesh);
-        if (entry) checkStabilityAfterMove(entry);
+        if (!entry) return;
+        checkStabilityAfterMove(entry);
+        // US4 Rhea (Task 3): the fragile-stacking warning previously only
+        // fired on spawn and on AI "Snap to Suggestion" — a box manually
+        // dragged into a stacking position never re-checked. TruckScene now
+        // forwards afterPositionChanged from DragController's onPositionChanged,
+        // so this fires for manual drag placements too.
+        checkFragileStackingRef.current?.(entry);
       },
     });
     sceneRef.current           = scene;
@@ -339,6 +389,7 @@ const TruckLoadingPrototype = () => {
     const candidates = getPlacementSuggestions(size, cargoRegistryRef.current, 3, {
       mass: source.physics?.mass ?? estimateMass(size),
       fragile: source.fragile ?? false,
+      restrictions: source.restrictions ?? {},   // US7: locks thisSideUp orientation search
       exclude: target ? [target] : []
     });
 
@@ -503,6 +554,16 @@ const TruckLoadingPrototype = () => {
     }
   }, [availableBoxes]);
 
+  // US4 Rhea (Task 3): keep a stable ref to the latest checkFragileStacking so
+  // the scene-init effect's afterPositionChanged callback (created once, and
+  // only recreated when checkStabilityAfterMove changes) always calls the
+  // current version — without needing to add checkFragileStacking to that
+  // effect's dependency array, which would tear down and rebuild the entire
+  // THREE/cannon scene every time availableBoxes changes.
+  useEffect(() => {
+    checkFragileStackingRef.current = checkFragileStacking;
+  }, [checkFragileStacking]);
+
   // ── US6 Yash + US5 Rhea: core box spawner ─────────────────────────────────
   const addBoxFromType = useCallback((boxType) => {
     if (!sceneRef.current || !boxType) return false;
@@ -510,6 +571,9 @@ const TruckLoadingPrototype = () => {
       alert(`Maximum ${MAX_BOXES} boxes reached`); return false;
     }
     const isFragile      = boxType.fragile ?? false;
+    const restrictions   = boxType.restrictions ?? {};   // US7
+    const isNoStack      = restrictions.noStack ?? false;
+    const isThisSideUp   = restrictions.thisSideUp ?? false;
     const boxGeometry    = getSharedGeometry(boxType.dimensions);
     const boxMaterial    = getSharedMaterial(boxType);
     const box            = new THREE.Mesh(boxGeometry, boxMaterial);
@@ -578,6 +642,9 @@ const TruckLoadingPrototype = () => {
     ));
     // US5: floating FRAGILE sprite
     if (isFragile) box.add(createFragileLabel(boxType.dimensions.height));
+    // US7: floating restriction sprites — stack them if a carton carries both
+    if (isNoStack) box.add(createNoStackLabel(boxType.dimensions.height, isFragile ? 0.34 : 0));
+    if (isThisSideUp) box.add(createThisSideUpLabel(boxType.dimensions.height, (isFragile ? 0.34 : 0) + (isNoStack ? 0.34 : 0)));
 
     sceneRef.current.add(box);
     const body = createBoxBody(boxType, box);
@@ -592,6 +659,7 @@ const TruckLoadingPrototype = () => {
       dimensions:   { ...boxType.dimensions },
       physics:      { ...boxType.physics },
       fragile:      isFragile,   // US5
+      restrictions: { ...restrictions },  // US7
       baseMaterial: boxMaterial
     };
 
@@ -618,6 +686,11 @@ const TruckLoadingPrototype = () => {
       return {
         index: index + 1, id: entry.id, type: entry.type, label: entry.label,
         fragile: entry.fragile ?? false,  // US5
+        restrictions: { ...(entry.restrictions ?? {}) },  // US7 — was missing, so an exported
+                                                            // plan silently lost No-Stack /
+                                                            // This-Side-Up on the way out
+        color: entry.baseMaterial?.color ? `#${entry.baseMaterial.color.getHexString()}` : '#888888',
+        physics: { ...(entry.physics ?? {}) },
         dimensions: {
           width:  Number(entry.dimensions.width.toFixed(3)),
           height: Number(entry.dimensions.height.toFixed(3)),
@@ -789,6 +862,7 @@ const TruckLoadingPrototype = () => {
     initialLoadSnapshotRef.current = cargoRegistryRef.current.map(e => ({
       type: e.type,
       fragile: e.fragile,
+      restrictions: { ...(e.restrictions ?? {}) },  // US7
       label: e.label,
       position: e.mesh.position.clone(),
       rotation: e.mesh.rotation.clone(),
@@ -806,10 +880,11 @@ const TruckLoadingPrototype = () => {
     setShowSessionComplete(false);
     if (!snapshot?.length) return;
     setTimeout(() => {
-      snapshot.forEach(({ type, fragile, label, position, rotation, dimensions, physics, color }) => {
+      snapshot.forEach(({ type, fragile, restrictions, label, position, rotation, dimensions, physics, color }) => {
         if (!sceneRef.current) return;
         const boxType = { id: type, label, color, dimensions, physics, fragile: fragile ?? false };
         const isFragile = fragile ?? false;
+        const restr = restrictions ?? {};   // US7
         const mesh = new THREE.Mesh(getSharedGeometry(dimensions), getSharedMaterial(boxType));
         mesh.position.copy(position);
         mesh.rotation.copy(rotation);
@@ -817,6 +892,8 @@ const TruckLoadingPrototype = () => {
         mesh.receiveShadow = true;
         mesh.add(new THREE.LineSegments(getSharedEdges(dimensions), isFragile ? fragilePinkLineRef.current : lineMaterialRef.current));
         if (isFragile) mesh.add(createFragileLabel(dimensions.height));
+        if (restr.noStack) mesh.add(createNoStackLabel(dimensions.height, isFragile ? 0.34 : 0));
+        if (restr.thisSideUp) mesh.add(createThisSideUpLabel(dimensions.height, (isFragile ? 0.34 : 0) + (restr.noStack ? 0.34 : 0)));
         sceneRef.current.add(mesh);
         const body = createBoxBody(boxType, mesh);
         const entry = {
@@ -829,6 +906,7 @@ const TruckLoadingPrototype = () => {
           dimensions: { ...dimensions },
           physics: { ...physics },
           fragile: isFragile,
+          restrictions: { ...restr },   // US7
           baseMaterial: getSharedMaterial(boxType)
         };
         cargoRegistryRef.current.push(entry);
@@ -837,6 +915,173 @@ const TruckLoadingPrototype = () => {
       });
     }, 50);
   }, [clearBoxes]);
+
+  // ── US4 Rhea (Sprint 6 carry-over): Import Confirmation Preview ───────────
+  //
+  // Reads a load-plan.json (the shape exportLoadPlan writes), builds a
+  // count/volume/type-breakdown summary, and stores it in importPreview for
+  // ImportConfirmModal to render. Nothing about the current session is
+  // touched here — that only happens in applyImportedLoadPlan, and only
+  // after the user explicitly confirms (twice, if boxes are already placed).
+  const summarizeImportPlan = useCallback((parsed) => {
+    const rawBoxes = Array.isArray(parsed?.boxes) ? parsed.boxes : [];
+    const grouped = new Map();
+    let totalVolumeFt3 = 0;
+
+    for (const b of rawBoxes) {
+      const d = b?.dimensions ?? {};
+      const w = Number(d.width)  || 0;
+      const h = Number(d.height) || 0;
+      const dep = Number(d.depth) || 0;
+      const volume = w * h * dep;
+      totalVolumeFt3 += volume;
+
+      const key = b?.type ?? b?.label ?? 'Unknown';
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          label: b?.label ?? key,
+          color: b?.color ?? '#888888',
+          fragile: !!b?.fragile,
+          noStack: !!b?.restrictions?.noStack,
+          thisSideUp: !!b?.restrictions?.thisSideUp,
+          count: 0,
+          volumeFt3: 0
+        });
+      }
+      const g = grouped.get(key);
+      g.count += 1;
+      g.volumeFt3 += volume;
+    }
+
+    return {
+      totalBoxes: rawBoxes.length,
+      totalVolumeFt3,
+      typeBreakdown: Array.from(grouped.values())
+    };
+  }, []);
+
+  const handleImportLoadPlanFile = useCallback((event) => {
+    const file = event?.target?.files?.[0];
+    // Always clear the input so re-selecting the same file (e.g. after a
+    // cancelled import) fires onChange again.
+    if (event?.target) event.target.value = '';
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      let parsed;
+      try {
+        parsed = JSON.parse(e.target.result);
+      } catch {
+        alert('That file is not valid JSON — could not read this load plan.');
+        return;
+      }
+      if (!Array.isArray(parsed?.boxes)) {
+        alert('This file doesn\'t look like a load-plan export (missing a "boxes" list).');
+        return;
+      }
+
+      const summary = summarizeImportPlan(parsed);
+      setImportPreview({
+        ...summary,
+        rawData: parsed,
+        fileName: file.name,
+        hasExistingBoxes: cargoRegistryRef.current.length > 0,
+        existingBoxCount: cargoRegistryRef.current.length
+      });
+    };
+    reader.onerror = () => alert('Could not read that file.');
+    reader.readAsText(file);
+  }, [summarizeImportPlan]);
+
+  // Reconstructs the scene from a parsed load-plan.json — same reconstruction
+  // pattern as handleTryAgain (shared geometry/material caches, physics body,
+  // fragile/restriction labels), just sourced from plain JSON position/
+  // rotation objects instead of a THREE snapshot, and capped at MAX_BOXES so
+  // a huge file can't silently blow past the scene's box limit.
+  const applyImportedLoadPlan = useCallback((parsed) => {
+    clearBoxes({ clearQueue: true });
+    const rawBoxes = Array.isArray(parsed?.boxes) ? parsed.boxes : [];
+    const toRestore = rawBoxes.slice(0, MAX_BOXES);
+    if (rawBoxes.length > MAX_BOXES) {
+      alert(`This file has ${rawBoxes.length} boxes — only the first ${MAX_BOXES} (the scene limit) were restored.`);
+    }
+
+    setTimeout(() => {
+      toRestore.forEach((b) => {
+        if (!sceneRef.current) return;
+        const dimensions = {
+          width:  Number(b?.dimensions?.width)  || 0,
+          height: Number(b?.dimensions?.height) || 0,
+          depth:  Number(b?.dimensions?.depth)  || 0
+        };
+        if (!dimensions.width || !dimensions.height || !dimensions.depth) return;
+
+        const type  = b?.type ?? b?.id ?? 'imported';
+        const label = b?.label ?? type;
+        const color = b?.color ?? '#888888';
+        const isFragile = !!b?.fragile;
+        const restr = b?.restrictions ?? {};
+        const physics = {
+          mass: b?.physics?.mass ?? estimateMass({ x: dimensions.width, y: dimensions.height, z: dimensions.depth }),
+          friction: b?.physics?.friction ?? 0.9,
+          restitution: b?.physics?.restitution ?? 0.0
+        };
+        const boxType = { id: type, label, color, dimensions, physics, fragile: isFragile };
+
+        const mesh = new THREE.Mesh(getSharedGeometry(dimensions), getSharedMaterial(boxType));
+        mesh.position.set(
+          Number(b?.position?.x) || 0,
+          Number(b?.position?.y) || (DECK_SURFACE_Y + dimensions.height / 2),
+          Number(b?.position?.z) || 0
+        );
+        mesh.rotation.set(
+          Number(b?.rotation?.x) || 0,
+          Number(b?.rotation?.y) || 0,
+          Number(b?.rotation?.z) || 0
+        );
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.add(new THREE.LineSegments(getSharedEdges(dimensions), isFragile ? fragilePinkLineRef.current : lineMaterialRef.current));
+        if (isFragile) mesh.add(createFragileLabel(dimensions.height));
+        if (restr.noStack) mesh.add(createNoStackLabel(dimensions.height, isFragile ? 0.34 : 0));
+        if (restr.thisSideUp) mesh.add(createThisSideUpLabel(dimensions.height, (isFragile ? 0.34 : 0) + (restr.noStack ? 0.34 : 0)));
+
+        sceneRef.current.add(mesh);
+        const body = createBoxBody(boxType, mesh);
+        const entry = {
+          id: `${type}-import-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+          type, label, mesh, body,
+          size: { x: dimensions.width, y: dimensions.height, z: dimensions.depth },
+          dimensions: { ...dimensions },
+          physics: { ...physics },
+          fragile: isFragile,
+          restrictions: { ...restr },
+          baseMaterial: getSharedMaterial(boxType)
+        };
+        cargoRegistryRef.current.push(entry);
+        setBoxes(prev => [...prev, { id: entry.id, mesh, type }]);
+        setStats(prev => ({ ...prev, boxCount: prev.boxCount + 1 }));
+        setTimeout(() => checkFragileStacking(entry), 100);
+      });
+      setLayoutVersion(prev => prev + 1);
+      setSelectedExampleName('Imported');
+      setSelectedExampleId(null);
+    }, 50);
+  }, [clearBoxes, checkFragileStacking]);
+
+  const handleConfirmImport = useCallback(() => {
+    if (!importPreview?.rawData) return;
+    applyImportedLoadPlan(importPreview.rawData);
+    setImportPreview(null);
+  }, [importPreview, applyImportedLoadPlan]);
+
+  // Cancelling never calls applyImportedLoadPlan, so nothing in the scene,
+  // registry, or queue has been touched — clearing this back to null is the
+  // whole undo (Task 3).
+  const handleCancelImport = useCallback(() => {
+    setImportPreview(null);
+  }, []);
 
   const handleClearGroup = useCallback(() => {
     dragControllerRef.current?.clearGroup();
@@ -870,6 +1115,7 @@ const TruckLoadingPrototype = () => {
       {
         mass: lastEntry.physics?.mass ?? estimateMass(lastEntry.size),
         fragile: lastEntry.fragile ?? false,
+        restrictions: lastEntry.restrictions ?? {},   // US7
         exclude: [lastEntry]
       }
     )[0];
@@ -920,6 +1166,8 @@ const TruckLoadingPrototype = () => {
     ghostPreviewRef.current?.hide();
     setSuggestion(null);
     setSuggestionCandidates([]);
+    // US4 Rhea (Task 3): fragile-stacking warning must fire for AI-assisted
+    // snap placement too, not just manual drag / initial spawn.
     setTimeout(() => checkFragileStacking(lastEntry), 100);
   }, [suggestion, boxes.length, checkFragileStacking, checkStabilityOnPlace]);
 
@@ -986,6 +1234,7 @@ const TruckLoadingPrototype = () => {
         addBox={addBox}
         clearBoxes={clearBoxes}
         exportLoadPlan={exportLoadPlan}
+        onImportLoadPlanFile={handleImportLoadPlanFile}
         historyIndex={historyIndex}
         history={history}
         undo={handleUndo}
@@ -1049,6 +1298,13 @@ const TruckLoadingPrototype = () => {
           }}>✕</button>
         </div>
       )}
+
+      <ImportConfirmModal
+        open={!!importPreview}
+        preview={importPreview}
+        onConfirm={handleConfirmImport}
+        onCancel={handleCancelImport}
+      />
 
       <SessionSummaryModal
         open={showSessionSummary}

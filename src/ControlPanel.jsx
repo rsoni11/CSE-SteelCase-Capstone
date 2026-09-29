@@ -11,6 +11,7 @@ const ControlPanel = ({
   addBox,
   clearBoxes,
   exportLoadPlan,
+  onImportLoadPlanFile,   // US4 Rhea (Sprint 6 carry-over): Import Confirmation Preview
   historyIndex,
   history,
   undo,
@@ -371,6 +372,18 @@ const ControlPanel = ({
               cursor: boxes.length === 0 ? 'not-allowed' : 'pointer', opacity: boxes.length === 0 ? 0.5 : 1 }}>
             Export Load Plan
           </button>
+
+          {/* US4 Rhea (Sprint 6 carry-over): Import Load Plan — opens the
+              preview/confirm modal, never applies directly on file select */}
+          {onImportLoadPlanFile && (
+            <label
+              style={{ ...btnBase, display: 'block', textAlign: 'center', boxSizing: 'border-box',
+                background: '#ffffff', color: '#004E89', border: '2px solid #004E89', cursor: 'pointer' }}
+            >
+              <input type="file" accept=".json,application/json" onChange={onImportLoadPlanFile} style={{ display: 'none' }} />
+              📤 Import Load Plan
+            </label>
+          )}
 
           {/* Undo / Redo */}
           <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
