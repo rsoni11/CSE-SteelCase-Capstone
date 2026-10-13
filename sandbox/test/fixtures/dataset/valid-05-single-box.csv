@@ -1,0 +1,2 @@
+plan_id,box_id,load_seq,stop_id,length_in,width_in,height_in,weight_lb,fragile,pos_x_ft,pos_y_ft,pos_z_ft,size_x_ft,size_y_ft,size_z_ft
+fx-v5,only,1,1,195,12,4,85.5,false,18.375,0.3667,-3.75,16.25,0.3333,1
