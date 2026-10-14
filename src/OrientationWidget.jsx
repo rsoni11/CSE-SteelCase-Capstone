@@ -42,9 +42,9 @@ const OrientationWidget = ({
   };
 
   const axes = [
-    { label: 'Turn', axis: 'y', left: '↺ Left', right: '↻ Right' },
-    { label: 'Tilt', axis: 'x', left: '▲ Forward', right: '▼ Back' },
-    { label: 'Roll', axis: 'z', left: '◀ Left', right: '▶ Right' },
+    { label: 'Turn', axis: 'y', key: 'R', left: '↺ Left', right: '↻ Right' },
+    { label: 'Tilt', axis: 'x', key: 'T', left: '▲ Forward', right: '▼ Back' },
+    { label: 'Roll', axis: 'z', key: 'Y', left: '◀ Left', right: '▶ Right' },
   ];
 
   return (
@@ -60,12 +60,12 @@ const OrientationWidget = ({
         <div style={{ fontSize: 11, color: 'var(--muted)' }}>Turn, tilt or roll the box 90°</div>
       </div>
 
-      {axes.map(({ label, axis, left, right }) => (
+      {axes.map(({ label, axis, key, left, right }) => (
         <div key={axis} style={{ marginBottom: 10 }}>
-          <div className="section-title" style={{ marginBottom: 4 }}>{label}</div>
+          <div className="section-title" style={{ marginBottom: 4 }}>{label} <kbd>{key}</kbd></div>
           <div style={{ display: 'flex', gap: 6 }}>
-            <button type="button" className="btn btn-sm" style={{ flex: 1 }} onClick={() => rotateBox(axis, 1)}>{left}</button>
-            <button type="button" className="btn btn-sm" style={{ flex: 1 }} onClick={() => rotateBox(axis, -1)}>{right}</button>
+            <button type="button" className="btn btn-sm" style={{ flex: 1 }} title={key} onClick={() => rotateBox(axis, 1)}>{left}</button>
+            <button type="button" className="btn btn-sm" style={{ flex: 1 }} title={`Shift + ${key}`} onClick={() => rotateBox(axis, -1)}>{right}</button>
           </div>
         </div>
       ))}

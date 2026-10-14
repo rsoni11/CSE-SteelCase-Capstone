@@ -9,6 +9,17 @@ const GROUP_COLOR     = new THREE.Color(0x667eea);
 const HIGHLIGHT_COLOR = new THREE.Color(0x4aa3ff);
 const COLLISION_COLOR = new THREE.Color(0xff0000);
 
+// Quick-rotate shortcuts for the active box, matching the Orientation widget's
+// Turn / Tilt / Roll rows. Shift reverses direction.
+const ROTATE_KEYS = { r: 'y', t: 'x', y: 'z' };
+const WORLD_AXES  = {
+  x: new THREE.Vector3(1, 0, 0),
+  y: new THREE.Vector3(0, 1, 0),
+  z: new THREE.Vector3(0, 0, 1),
+};
+// Which two size components trade places for a 90° turn about each axis
+const SWAP_DIMS = { x: ['y', 'z'], y: ['x', 'z'], z: ['x', 'y'] };
+
 export class DragController {
   constructor({
     camera,
@@ -56,6 +67,12 @@ export class DragController {
     });
 
     this._group = new Map();
+
+    // The last box clicked stays "active" after the drag ends, so the rotate
+    // shortcuts work without opening the Orientation widget.
+    this.activeEntry   = null;
+    this._activeOutline = null;
+    this._outlineMaterial = new THREE.LineBasicMaterial({ color: HIGHLIGHT_COLOR });
 
     this._onDown    = e => this.onDown(e);
     this._onMove    = e => this.onMove(e);
@@ -192,15 +209,24 @@ export class DragController {
     mesh.position.y = Math.max(mesh.position.y, FLOOR_CONTACT_Y + size.y / 2);
   }
 
-  _tryRotate90Y(entry, { dragging }) {
+  _tryRotate90Y(entry, opts) {
+    return this._tryRotate90(entry, 'y', 1, opts);
+  }
+
+  // Turns the box 90° about a world axis. Rotating about world (not local)
+  // axes keeps entry.size — a world-aligned AABB — in step with the mesh even
+  // after several mixed turns. Reverts if the new pose would collide.
+  _tryRotate90(entry, axis, dir, { dragging }) {
     const mesh = entry.mesh;
     const originalQuat = mesh.quaternion.clone();
+    const originalPos  = mesh.position.clone();
+    const [a, b] = SWAP_DIMS[axis];
 
-    mesh.rotation.y += Math.PI / 2;
+    const turn = new THREE.Quaternion().setFromAxisAngle(WORLD_AXES[axis], (Math.PI / 2) * dir);
+    mesh.quaternion.premultiply(turn);
 
-    const sx = entry.size.x;
-    entry.size.x = entry.size.z;
-    entry.size.z = sx;
+    const swap = () => { const t = entry.size[a]; entry.size[a] = entry.size[b]; entry.size[b] = t; };
+    swap();
 
     this.clampPositionAfterResize(entry);
 
@@ -209,8 +235,8 @@ export class DragController {
 
     if (collides) {
       mesh.quaternion.copy(originalQuat);
-      entry.size.x = entry.size.z;
-      entry.size.z = sx;
+      mesh.position.copy(originalPos);
+      swap();
       if (dragging && this.selectedEntry === entry) mesh.material = this.collisionMaterial;
       return false;
     }
@@ -230,6 +256,30 @@ export class DragController {
   rotateEntry(entry) {
     if (!entry?.mesh || !this.cargoRegistry.includes(entry)) return;
     this._tryRotate90Y(entry, { dragging: false });
+  }
+
+  // Rotates the active box (or the one being dragged) about 'x' | 'y' | 'z'
+  rotateActive(axis, dir = 1) {
+    const entry = this.dragging ? this.selectedEntry : this.activeEntry;
+    if (!entry?.mesh || !this.cargoRegistry.includes(entry)) return false;
+    return this._tryRotate90(entry, axis, dir, { dragging: this.dragging });
+  }
+
+  setActiveEntry(entry) {
+    if (this.activeEntry === entry) return;
+    if (this._activeOutline) {
+      this._activeOutline.removeFromParent();
+      this._activeOutline.geometry.dispose();
+      this._activeOutline = null;
+    }
+    this.activeEntry = entry ?? null;
+    if (!entry?.mesh?.geometry) return;
+
+    const outline = new THREE.LineSegments(new THREE.EdgesGeometry(entry.mesh.geometry), this._outlineMaterial);
+    outline.scale.setScalar(1.02);
+    outline.raycast = () => {};   // never let the outline steal box picks
+    entry.mesh.add(outline);
+    this._activeOutline = outline;
   }
 
   exitOrientMode(entry) {
@@ -302,6 +352,7 @@ export class DragController {
 
     if (!hits.length) {
       this.clearGroup();
+      this.setActiveEntry(null);
       return;
     }
 
@@ -312,6 +363,7 @@ export class DragController {
     }
     if (!entry) return;
 
+    this.setActiveEntry(entry);
     this.selectedEntry = entry;
     this.originalPosition = entry.mesh.position.clone();
     this.originalQuaternion = entry.mesh.quaternion.clone();
@@ -486,8 +538,20 @@ export class DragController {
   onKeyDown(e) {
     if (e.key === 'Escape') {
       this.clearGroup();
+      this.setActiveEntry(null);
       return;
     }
+
+    const t = e.target;
+    const typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+    const rotateAxis = ROTATE_KEYS[(e.key || '').toLowerCase()];
+    if (rotateAxis && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (!this.dragging && !this.activeEntry) return;
+      e.preventDefault();
+      this.rotateActive(rotateAxis, e.shiftKey ? -1 : 1);
+      return;
+    }
+
     if (!this.dragging || !this.selectedEntry) return;
 
     if (e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp') {
@@ -496,9 +560,6 @@ export class DragController {
     } else if (e.key === 's' || e.key === 'S' || e.key === 'ArrowDown') {
       e.preventDefault();
       this.adjustHeight(-0.5);
-    } else if (e.key === 'r' || e.key === 'R') {
-      e.preventDefault();
-      this.rotateSelected();
     }
   }
 
@@ -510,9 +571,12 @@ export class DragController {
     this.manualYOffset = 0;
     this.lastWorldPoint = null;
     this._group.clear();
+    this.setActiveEntry(null);
   }
 
   destroy() {
+    this.setActiveEntry(null);
+    this._outlineMaterial.dispose();
     this.domElement.removeEventListener('pointerdown', this._onDown);
     this.domElement.removeEventListener('dblclick', this._onDblClick);
     window.removeEventListener('pointermove', this._onMove);

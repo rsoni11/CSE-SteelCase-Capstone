@@ -10,8 +10,11 @@ const CAMERA = [
 const BOXES = [
   ['Move box', 'Click + drag'],
   ['Raise / lower', 'W / S  or  ↑ / ↓'],
-  ['Rotate 90°', 'R'],
-  ['Tilt / roll', 'Double-click'],
+  ['Turn 90°', 'R'],
+  ['Tilt 90°', 'T'],
+  ['Roll 90°', 'Y'],
+  ['Reverse turn / tilt / roll', 'Shift + key'],
+  ['Orientation panel', 'Double-click'],
   ['Group select', 'Shift + click'],
   ['Clear group', 'Esc'],
 ];
