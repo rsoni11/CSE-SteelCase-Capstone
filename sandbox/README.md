@@ -2,9 +2,10 @@
 
 Headless prototype that turns the Steelcase truck information file into load
 plans, places them with the existing heuristic, and exports a validated
-training dataset. It lives entirely in `sandbox/` and imports
-`src/packingScore.js` and `src/fitSearch.js` unmodified; nothing in the app's
-`src/` is changed.
+training dataset. Its library code lives in `sandbox/src/` and imports
+`src/packingScore.js` and `src/fitSearch.js` unmodified. The entry scripts
+(`run.mjs`, `buildDataset.mjs`) and `diversity.mjs` / `truckCsv.mjs` live in
+the app's `src/`; run them from `sandbox/` so `data/` and `out/` resolve here.
 
 Needs Node 20 or newer. There is nothing to `npm install`.
 
@@ -26,8 +27,8 @@ Run from `sandbox/`.
 
 | Command | What it does |
 | --- | --- |
-| `node src/buildDataset.mjs` | Sprint 9: generate, place, validate, de-duplicate and split the dataset |
-| `node src/run.mjs` | Sprint 8: 50 plans, diversity comparison and tutor trial |
+| `node ../src/buildDataset.mjs` | Sprint 9: generate, place, validate, de-duplicate and split the dataset |
+| `node ../src/run.mjs` | Sprint 8: 50 plans, diversity comparison and tutor trial |
 | `npm test` | Sandbox tests, including the three Sprint 9 test scenarios |
 | `node src/verifyHeuristic.mjs` | Checks `src/` matches `origin/Yash` and its tests pass |
 

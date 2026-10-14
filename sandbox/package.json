@@ -5,8 +5,8 @@
   "private": true,
   "scripts": {
     "convert": "node src/xlsxToCsv.mjs",
-    "start": "node src/run.mjs",
-    "dataset": "node src/buildDataset.mjs",
+    "start": "node ../src/run.mjs",
+    "dataset": "node ../src/buildDataset.mjs",
     "test": "node --test test/truckCsv.test.mjs test/generators.test.mjs test/dataset.test.mjs",
     "verify": "node src/verifyHeuristic.mjs"
   }

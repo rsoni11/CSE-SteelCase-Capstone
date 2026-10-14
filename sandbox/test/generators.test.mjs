@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { TRUCK_VOLUME, BOX_CONFIGS } from '../../src/constants.js';
 import { FLOOR_Y } from '../../src/packingScore.js';
 import { generateSyntheticPlans, generateRandomPlans, planToUploaderCsv, DEFAULT_OPTIONS } from '../src/generators.mjs';
-import { setDiversity } from '../src/diversity.mjs';
+import { setDiversity } from '../../src/diversity.mjs';
 import { planToItems, recommendLoadOrder, evaluatePlacement, buildReferenceLoad } from '../src/tutor.mjs';
 
 /** 3 shipments × 4 deliveries × 30 cartons, sizes varying by shipment. */

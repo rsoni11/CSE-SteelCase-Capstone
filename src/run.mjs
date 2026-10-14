@@ -2,13 +2,13 @@
  * Sandbox pipeline: CSV → validated units → load plans → diversity comparison
  * → tutor trial. Writes everything under out/ and touches nothing outside sandbox/.
  *
- * Run with:  node src/run.mjs [--csv data/truck_info.csv] [--plans 50]
- *                             [--seed 20261013] [--out out] [--tutor-plans 50]
+ * Run from sandbox/ with:  node ../src/run.mjs [--csv data/truck_info.csv] [--plans 50]
+ *                          [--seed 20261013] [--out out] [--tutor-plans 50]
  */
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { STEELCASE_LOAD_EXAMPLES } from '../../src/loadExamples.js';
+import { STEELCASE_LOAD_EXAMPLES } from './loadExamples.js';
 import { parseTruckCsv, issuesToCsv, TruckCsvSchemaError } from './truckCsv.mjs';
 import {
   generateSyntheticPlans,
@@ -16,9 +16,9 @@ import {
   planToUploaderCsv,
   typeKeyOf,
   FRAGILE_PATTERN
-} from './generators.mjs';
+} from '../sandbox/src/generators.mjs';
 import { setDiversity, typeCounts } from './diversity.mjs';
-import { createRng } from './rng.mjs';
+import { createRng } from '../sandbox/src/rng.mjs';
 import {
   planToItems,
   briefing,
@@ -26,7 +26,7 @@ import {
   simulateLearner,
   sessionSummary,
   describeSpot
-} from './tutor.mjs';
+} from '../sandbox/src/tutor.mjs';
 
 const args = process.argv.slice(2);
 const arg = (name, fallback) => {

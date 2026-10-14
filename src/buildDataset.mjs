@@ -2,8 +2,8 @@
  * Sprint 9 (SCRUM-74): truck CSV → placed load plans → validated dataset →
  * de-duplicated train / validation / test splits, plus a quality report.
  *
- * Run with:  node src/buildDataset.mjs [--csv data/truck_info.csv] [--plans 50]
- *                                      [--seed 20261013] [--out out/dataset]
+ * Run from sandbox/ with:  node ../src/buildDataset.mjs [--csv data/truck_info.csv]
+ *                          [--plans 50] [--seed 20261013] [--out out/dataset]
  *
  * The same CSV, code version, plan count and seed always produce the same
  * files; manifest.json records all four.
@@ -15,9 +15,9 @@ import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parseTruckCsv, issuesToCsv, TruckCsvSchemaError } from './truckCsv.mjs';
-import { generateSyntheticPlans, generateRandomPlans } from './generators.mjs';
+import { generateSyntheticPlans, generateRandomPlans } from '../sandbox/src/generators.mjs';
 import { setDiversity } from './diversity.mjs';
-import { planToItems, buildReferenceLoad } from './tutor.mjs';
+import { planToItems, buildReferenceLoad } from '../sandbox/src/tutor.mjs';
 import {
   DATASET_COLUMNS,
   SPLIT_RATIOS,
@@ -28,7 +28,7 @@ import {
   dedupePlans,
   splitPlans,
   qualityReport
-} from './dataset.mjs';
+} from '../sandbox/src/dataset.mjs';
 
 /** The diversity comparison is always made on equal samples of this size. */
 const DIVERSITY_SAMPLE = 50;
