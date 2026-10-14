@@ -1,56 +1,60 @@
-import React, { useState } from 'react';
+import React from 'react';
+import Icon from './Icons';
 
-// Toggleable controls guide panel
-const ControlsGuide = () => {
-  const [isOpen, setIsOpen] = useState(false);
+const CAMERA = [
+  ['Rotate view', 'Left drag'],
+  ['Zoom', 'Scroll'],
+  ['Pan', 'Right drag'],
+];
+
+const BOXES = [
+  ['Move box', 'Click + drag'],
+  ['Raise / lower', 'W / S  or  ↑ / ↓'],
+  ['Rotate 90°', 'R'],
+  ['Tilt / roll', 'Double-click'],
+  ['Group select', 'Shift + click'],
+  ['Clear group', 'Esc'],
+];
+
+// Toggleable controls guide, shown from the stage toolbar
+// Open state is owned by the parent so only one stage popover shows at a time
+const ControlsGuide = ({ isOpen, onToggle }) => {
 
   return (
-    <div style={{
-      position: 'absolute', top: 100, right: 30,
-      zIndex: 10, display: 'flex', flexDirection: 'column', alignItems: 'flex-end'
-    }}>
+    <div className="popover-wrap">
       <button
-        onClick={() => setIsOpen(prev => !prev)}
-        style={{
-          background: isOpen ? '#667eea' : 'rgba(255,255,255,0.95)',
-          color: isOpen ? '#fff' : '#667eea',
-          border: '2px solid #667eea',
-          borderRadius: isOpen ? '12px 12px 0 0' : '12px',
-          padding: '8px 16px',
-          fontSize: '13px', fontWeight: 600, cursor: 'pointer',
-          boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
-          transition: 'all 0.2s ease'
-        }}
+        type="button"
+        className={`btn floating-btn${isOpen ? ' is-active' : ''}`}
+        onClick={onToggle}
+        aria-expanded={isOpen}
+        title="Controls"
       >
-        {isOpen ? '✕ Close Guide' : '? Controls'}
+        <Icon name={isOpen ? 'x' : 'keyboard'} /> <span className="btn-label">Controls</span>
       </button>
 
       {isOpen && (
-        <div style={{
-          background: 'rgba(255,255,255,0.97)',
-          borderRadius: '12px 0 12px 12px',
-          boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
-          padding: '16px 20px', fontSize: '13px', color: '#666', maxWidth: '220px',
-          border: '2px solid #667eea', borderTop: 'none'
-        }}>
-          <h4 style={{ margin: '0 0 8px 0', fontSize: '13px', fontWeight: 600, color: '#1a1a1a' }}>Camera Controls</h4>
-          <div style={{ lineHeight: '1.8' }}>
-            <div><strong>Rotate:</strong> Left click + drag</div>
-            <div><strong>Zoom:</strong> Scroll wheel</div>
-            <div><strong>Pan:</strong> Right click + drag</div>
+        <div className="popover" style={{ width: 280 }}>
+          <h4>Camera</h4>
+          <div className="kbd-list">
+            {CAMERA.map(([action, keys]) => (
+              <div key={action} className="kbd-row"><span>{action}</span><kbd>{keys}</kbd></div>
+            ))}
           </div>
-          <hr style={{ border: 'none', borderTop: '1px solid #e0e0e0', margin: '10px 0' }} />
-          <h4 style={{ margin: '0 0 8px 0', fontSize: '13px', fontWeight: 600, color: '#1a1a1a' }}>Box Controls</h4>
-          <div style={{ lineHeight: '1.8' }}>
-            <div><strong>Move box:</strong> Click + drag</div>
-            <div><strong>Raise:</strong> W / ↑ while dragging</div>
-            <div><strong>Lower:</strong> S / ↓ while dragging</div>
-            <div><strong>Rotate 90°:</strong> R / panel while dragging</div>
-            <div><strong>Tilt / roll:</strong> Double-click a box</div>
-            <div><strong>Group select:</strong> Shift+click boxes (move together)</div>
-            <div><strong>Clear group:</strong> Escape or click empty space</div>
-            <div><strong style={{ color: '#4aa3ff' }}>Blue:</strong> Valid placement</div>
-            <div><strong style={{ color: '#ff0000' }}>Red:</strong> Collision!</div>
+          <hr />
+          <h4>Boxes</h4>
+          <div className="kbd-list">
+            {BOXES.map(([action, keys]) => (
+              <div key={action} className="kbd-row"><span>{action}</span><kbd>{keys}</kbd></div>
+            ))}
+          </div>
+          <hr />
+          <div style={{ display: 'flex', gap: 16, fontSize: 12 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className="swatch" style={{ background: '#4aa3ff', width: 10, height: 10 }} /> Valid spot
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className="swatch" style={{ background: '#ff3b30', width: 10, height: 10 }} /> Collision
+            </span>
           </div>
         </div>
       )}

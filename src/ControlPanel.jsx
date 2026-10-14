@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { MAX_BOXES } from './constants';
 import LoadExampleSelector from './LoadExampleSelector';
+import Icon from './Icons';
 
-// Draggable, minimizable control panel — all user stories combined
+// Left sidebar (bottom sheet on phones) — all user stories combined.
+// Undo/redo live in the header, so they are not repeated here.
 const ControlPanel = ({
   boxes,
   availableBoxes,
@@ -11,10 +13,6 @@ const ControlPanel = ({
   addBox,
   clearBoxes,
   exportLoadPlan,
-  historyIndex,
-  history,
-  undo,
-  redo,
   isBoxDragging,
   orientEntry = null,
   onRotateBox,
@@ -24,7 +22,6 @@ const ControlPanel = ({
   // US1 Yash
   loadExamples,
   onSelectLoadExample,
-  selectedExampleName,
   selectedExampleId,
   queueCount,
   queueSummary,
@@ -49,85 +46,50 @@ const ControlPanel = ({
   selectedGroupCount = 0,
   onClearGroup,
 }) => {
-  const [isPanelMinimized, setIsPanelMinimized] = useState(false);
-  const [panelPosition, setPanelPosition] = useState({ x: 30, y: window.innerHeight - 500 });
-  const [isDraggingPanel, setIsDraggingPanel] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-
-  const handleMouseDown = (e) => {
-    if (e.target.closest('.panel-header')) {
-      setIsDraggingPanel(true);
-      setDragOffset({ x: e.clientX - panelPosition.x, y: e.clientY - panelPosition.y });
-    }
-  };
-  const handleMouseMove = (e) => {
-    if (isDraggingPanel) setPanelPosition({ x: e.clientX - dragOffset.x, y: e.clientY - dragOffset.y });
-  };
-  const handleMouseUp = () => setIsDraggingPanel(false);
-
-  useEffect(() => {
-    if (isDraggingPanel) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
-      return () => { window.removeEventListener('mousemove', handleMouseMove); window.removeEventListener('mouseup', handleMouseUp); };
-    }
-  }, [isDraggingPanel, dragOffset]);
-
-  const btnBase = {
-    width: '100%', padding: '12px 24px', borderRadius: '8px',
-    fontSize: '14px', fontWeight: 600, transition: 'all 0.2s ease', marginBottom: '8px'
-  };
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isDropOver, setIsDropOver] = useState(false);
 
   // Becky: check if selected box still has remaining quantity
-  const selectedLoadedCount  = selectedBoxType ? boxes.filter(b => b.type === selectedBoxType.id).length : 0;
-  const selectedRemaining    = selectedBoxType ? ((selectedBoxType.availableQty ?? Infinity) - selectedLoadedCount) : 0;
-  const canAddBox            = selectedBoxType && selectedRemaining > 0 && boxes.length < MAX_BOXES;
+  const selectedLoadedCount = selectedBoxType ? boxes.filter(b => b.type === selectedBoxType.id).length : 0;
+  const selectedRemaining   = selectedBoxType ? ((selectedBoxType.availableQty ?? Infinity) - selectedLoadedCount) : 0;
+  const canAddBox           = selectedBoxType && selectedRemaining > 0 && boxes.length < MAX_BOXES;
+  const hasBoxes            = boxes.length > 0;
+  const canSnap             = hasSuggestion && hasBoxes;
+  const canRotate           = isBoxDragging || !!orientEntry;
+
+  const addLabel = boxes.length >= MAX_BOXES
+    ? 'Truck full'
+    : (selectedRemaining <= 0 && selectedBoxType
+        ? 'Quantity depleted'
+        : ((queueCount ?? 0) > 0
+            ? (selectedBoxType?.fragile ? 'Add next box (fragile)' : 'Add next box')
+            : (selectedBoxType?.fragile ? 'Add fragile box' : 'Add box')));
 
   return (
-    <div
-      style={{ position: 'absolute', left: `${panelPosition.x}px`, top: `${panelPosition.y}px`,
-        background: '#ffffff', borderRadius: '12px', boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
-        minWidth: '320px', zIndex: 10, userSelect: 'none' }}
-      onMouseDown={handleMouseDown}
-    >
-      {/* Draggable Header */}
-      <div className="panel-header" style={{
-        padding: '16px 20px',
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        borderTopLeftRadius: '12px', borderTopRightRadius: '12px',
-        cursor: 'move', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
-      }}>
-        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: '#ffffff' }}>Add Boxes</h3>
-        <button
-          onClick={() => setIsPanelMinimized(!isPanelMinimized)}
-          style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '4px',
-            color: '#ffffff', cursor: 'pointer', padding: '4px 12px', fontSize: '14px', fontWeight: 600 }}
-        >{isPanelMinimized ? '□' : '−'}</button>
-      </div>
+    <aside className={`sidebar${isCollapsed ? ' is-collapsed' : ''}`}>
+      <button type="button" className="sidebar-handle" onClick={() => setIsCollapsed(c => !c)}>
+        {isCollapsed ? 'Show controls' : 'Hide controls'}
+      </button>
 
-      {/* Panel Content */}
-      {!isPanelMinimized && (
-        <div style={{ padding: '24px', maxHeight: '85vh', overflowY: 'auto' }}>
+      <div className="sidebar-scroll">
+        {/* ── 1. Load ─────────────────────────────────────────────────────── */}
+        <section className="section">
+          <div className="section-title">1 · Choose a load</div>
+          <label
+            className={`dropzone${isDropOver ? ' is-over' : ''}`}
+            onDragOver={e => { e.preventDefault(); setIsDropOver(true); }}
+            onDragLeave={e => { e.preventDefault(); setIsDropOver(false); }}
+            onDrop={e => { e.preventDefault(); setIsDropOver(false); handleCSVUpload(e); }}
+          >
+            <input type="file" accept=".csv" onChange={handleCSVUpload} style={{ display: 'none' }} />
+            <Icon name="upload" size={20} />
+            <div>
+              <div className="dropzone-title">Upload Steelcase CSV</div>
+              <div className="dropzone-sub">Drop a file here or click to browse</div>
+            </div>
+          </label>
 
-          {/* ── CSV Upload ───────────────────────────────────────────────── */}
-          <div style={{ marginBottom: '16px' }}>
-            <label
-              onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor='#1AA37A'; e.currentTarget.style.background='#e8f6f3'; }}
-              onDragLeave={e => { e.preventDefault(); e.currentTarget.style.borderColor='#ced4da'; e.currentTarget.style.background='#f8f9fa'; }}
-              onDrop={e => { e.preventDefault(); e.currentTarget.style.borderColor='#ced4da'; e.currentTarget.style.background='#f8f9fa'; handleCSVUpload(e); }}
-              style={{ display: 'block', width: '100%', padding: '20px 10px', background: '#f8f9fa',
-                color: '#495057', border: '2px dashed #ced4da', borderRadius: '8px',
-                fontSize: '13px', fontWeight: 600, cursor: 'pointer', textAlign: 'center',
-                transition: 'all 0.2s ease', boxSizing: 'border-box' }}
-            >
-              <input type="file" accept=".csv" onChange={handleCSVUpload} style={{ display: 'none' }} />
-              <div style={{ fontSize: '18px', marginBottom: '4px' }}>📥</div>
-              Drag & Drop your Steelcase CSV here<br/>
-              <span style={{ fontSize: '11px', color: '#888', fontWeight: 400 }}>or click to browse</span>
-            </label>
-          </div>
-
-          {/* ── US1 Yash: Load Example Selector ─────────────────────────── */}
+          {/* US1 Yash: Load Example Selector */}
           {loadExamples && (
             <LoadExampleSelector
               examples={loadExamples}
@@ -135,51 +97,48 @@ const ControlPanel = ({
               onSelect={onSelectLoadExample}
             />
           )}
+        </section>
 
-          {/* US1 Yash: queue status */}
-          {selectedExampleName && (
-            <div style={{ marginBottom: '12px', fontSize: '12px', color: '#495057', background: '#f8f9fa', borderRadius: '8px', padding: '10px' }}>
-              Selected Example: <strong>{selectedExampleName}</strong><br/>
-              Queue Remaining: <strong>{queueCount ?? 0}</strong>
+        {/* US1 Yash: queue status + summary */}
+        {queueSummary?.length > 0 && (
+          <section className="section">
+            <div className="queue-card">
+              <div className="queue-head">
+                <span>Boxes waiting in queue</span>
+                <strong>{queueCount ?? 0}</strong>
+              </div>
+              <div className="queue-list">
+                {queueSummary.map(item => (
+                  <div key={`${item.label}-${item.count}`} className="queue-item">
+                    <span className="swatch" style={{ background: item.color, width: 10, height: 10 }} />
+                    <span>{item.label}</span>
+                    <strong>×{item.count}</strong>
+                  </div>
+                ))}
+              </div>
             </div>
-          )}
+          </section>
+        )}
 
-          {/* US1 Yash: queue summary pills */}
-          {queueSummary?.length > 0 && (
-            <div style={{ marginBottom: '12px', background: '#ffffff', border: '1px solid #e9ecef', borderRadius: '8px', padding: '8px', maxHeight: '120px', overflowY: 'auto' }}>
-              {queueSummary.map(item => (
-                <div key={`${item.label}-${item.count}`} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', fontSize: '11px' }}>
-                  <span style={{ width: '10px', height: '10px', borderRadius: '2px', background: item.color, flexShrink: 0 }} />
-                  <span style={{ color: '#495057' }}>{item.label}</span>
-                  <strong style={{ marginLeft: 'auto', color: '#212529' }}>x{item.count}</strong>
-                </div>
-              ))}
-            </div>
-          )}
+        {/* ── 2. Stop + box type ──────────────────────────────────────────── */}
+        <section className="section">
+          <div className="section-title">2 · Pick a stop and box</div>
 
-          {/* ── Becky: Active Stop Filter banner / empty state ───────────── */}
+          {/* Becky: Active Stop Filter banner / empty state */}
           {activeStopFilter ? (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              padding: '10px 12px', marginBottom: '16px', background: '#eef2f5',
-              borderLeft: '4px solid #1AA37A', borderRadius: '6px', fontSize: '12px', fontWeight: 600, color: '#004E89' }}>
-              <span>Currently Loading: Stop {activeStopFilter}</span>
-              <button onClick={() => setActiveStopFilter(null)} style={{
-                background: '#ffffff', border: '1px solid #ced4da', color: '#666',
-                borderRadius: '4px', cursor: 'pointer', fontSize: '11px', padding: '4px 8px' }}>
-                Clear
-              </button>
+            <div className="callout callout-active">
+              <span>Loading stop {activeStopFilter}</span>
+              <button type="button" className="btn btn-sm" onClick={() => setActiveStopFilter(null)}>Clear</button>
             </div>
           ) : (
-            <div style={{ padding: '16px 14px', marginBottom: '16px', background: '#f8f9fa',
-              border: '1px dashed #ced4da', borderRadius: '8px',
-              fontSize: '13px', color: '#666', textAlign: 'center', lineHeight: '1.5' }}>
-              Select a Stop from the <strong>Shipment Summary</strong> panel ↗<br/>to view and load packages.
+            <div className="callout callout-info">
+              <span>Open <strong>Shipment summary</strong> (top right) and pick a stop to see its packages.</span>
             </div>
           )}
 
-          {/* ── Becky: Box Type Selector with qty tracking (stop-filtered) ── */}
+          {/* Becky: Box Type Selector with qty tracking (stop-filtered) */}
           {activeStopFilter && availableBoxes.length > 0 && (
-            <div style={{ marginBottom: '20px', maxHeight: '250px', overflowY: 'auto' }}>
+            <div className="option-list" style={{ marginTop: 8, maxHeight: 260, overflowY: 'auto' }}>
               {availableBoxes.map((config) => {
                 const isFragile    = config.fragile ?? false;
                 const loadedCount  = boxes.filter(b => b.type === config.id).length;
@@ -187,257 +146,171 @@ const ControlPanel = ({
                 const isDepleted   = remainingQty <= 0;
                 const isSelected   = selectedBoxType?.id === config.id;
                 return (
-                  <div key={config.id}
+                  <button
+                    type="button"
+                    key={config.id}
+                    className={`option${isSelected ? ' is-selected' : ''}${isDepleted ? ' is-disabled' : ''}`}
                     onClick={() => { if (!isDepleted) setSelectedBoxType(config); }}
-                    style={{
-                      padding: '12px 16px', marginBottom: '8px',
-                      border: `2px solid ${isSelected ? (isFragile ? '#ff0066' : config.color) : '#e0e0e0'}`,
-                      borderRadius: '8px', cursor: isDepleted ? 'not-allowed' : 'pointer',
-                      transition: 'all 0.2s ease',
-                      background: isSelected ? (isFragile ? '#fff0f5' : `${config.color}10`) : '#ffffff',
-                      opacity: isDepleted ? 0.6 : 1,
-                      transform: isSelected && !isDepleted ? 'scale(1.02)' : 'scale(1)'
-                    }}
+                    disabled={isDepleted}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        {/* US5 Rhea: pink swatch + warning icon for fragile */}
-                        <div style={{ position: 'relative', flexShrink: 0 }}>
-                          <div style={{ width: '20px', height: '20px',
-                            background: isFragile ? '#ff69b4' : config.color,
-                            borderRadius: '4px',
-                            border: isFragile ? '2px solid #ff0066' : 'none' }} />
-                          {isFragile && <span style={{ position: 'absolute', top: '-6px', right: '-6px', fontSize: '10px', lineHeight: 1 }}>⚠️</span>}
-                        </div>
-                        <div>
-                          <div style={{ fontSize: '13px', fontWeight: 600, color: '#1a1a1a' }}>{config.label}</div>
-                          {/* US5 Rhea: fragile label */}
-                          {isFragile && <div style={{ fontSize: '11px', color: '#e74c3c', fontWeight: 600, marginTop: '1px' }}>⚠ FRAGILE</div>}
-                        </div>
+                    <div className="option-row">
+                      {/* US5 Rhea: fragile swatch is ringed */}
+                      <span className={`swatch${isFragile ? ' fragile' : ''}`} style={{ background: config.color }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div className="option-title">{config.label}</div>
+                        {isFragile && (
+                          <span className="chip chip-fragile" style={{ marginTop: 4 }}>
+                            <Icon name="alert" size={11} /> Fragile
+                          </span>
+                        )}
                       </div>
                       {/* Becky: quantity indicator */}
-                      <div style={{ fontSize: '11px', fontWeight: 700,
-                        background: isDepleted ? '#f1f3f5' : '#e8f6f3',
-                        color: isDepleted ? '#adb5bd' : '#1AA37A',
-                        padding: '4px 8px', borderRadius: '12px' }}>
+                      <span className={`chip ${isDepleted ? 'chip-muted' : 'chip-success'}`}>
                         {remainingQty === Infinity ? '∞' : remainingQty} left
-                      </div>
+                      </span>
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
           )}
 
-          {/* ── Add Box (Becky qty-aware / Yash queue-aware) ─────────────── */}
+          {/* Add Box (Becky qty-aware / Yash queue-aware) */}
           <button
+            type="button"
+            className="btn btn-primary btn-block btn-lg"
+            style={{ marginTop: 10 }}
             onClick={addNextQueuedBox ?? addBox}
             disabled={!canAddBox}
-            style={{
-              ...btnBase,
-              background: selectedBoxType && canAddBox
-                ? ((selectedBoxType.fragile ?? false) ? '#ff69b4' : selectedBoxType.color)
-                : '#e0e0e0',
-              color:  canAddBox ? '#ffffff' : '#999',
-              border: (selectedBoxType?.fragile && canAddBox) ? '2px solid #ff0066' : 'none',
-              cursor: canAddBox ? 'pointer' : 'not-allowed',
-              opacity: canAddBox ? 1 : 0.5
-            }}
           >
-            {boxes.length >= MAX_BOXES
-              ? 'Truck Full (Limit Reached)'
-              : (selectedRemaining <= 0 && selectedBoxType
-                  ? 'Quantity Depleted'
-                  : ((queueCount ?? 0) > 0
-                      ? ((selectedBoxType?.fragile ? '⚠ Add Next Fragile Box' : 'Add Next Box From Queue'))
-                      : ((selectedBoxType?.fragile ? '⚠ Add Fragile Box' : 'Add Box'))))}
+            <Icon name="plus" /> {addLabel}
           </button>
 
           {/* Load order — heaviest to the deck first, fragile on top */}
           {(queueCount ?? 0) > 1 && sortQueueForPacking && (
             <button
               type="button"
+              className="btn btn-ghost btn-block"
+              style={{ marginTop: 6 }}
               onClick={sortQueueForPacking}
               title="Reorder the remaining queue: heaviest and bulkiest first, fragile last"
-              style={{ ...btnBase, background: '#ffffff', color: '#004E89',
-                border: '2px solid #004E89', cursor: 'pointer' }}
             >
-              ⚖ Sort Queue by Weight
+              <Icon name="sort" /> Sort queue by weight
             </button>
           )}
+        </section>
 
-          {/* ── US6 Yash: Stress Test ────────────────────────────────────── */}
-          <button onClick={runStressTest} disabled={isStressTestRunning}
-            style={{ ...btnBase, background: '#2C3E50', color: '#ffffff', border: 'none',
-              cursor: isStressTestRunning ? 'not-allowed' : 'pointer', opacity: isStressTestRunning ? 0.6 : 1 }}>
-            {isStressTestRunning ? 'Running 55-Box Stress Test...' : 'Run 55-Box Stress Test'}
-          </button>
-          {stressResult && (
-            <div style={{ marginBottom: '10px', fontSize: '12px', color: stressResult.passed ? '#1AA37A' : '#FF6B35', fontWeight: 600 }}>
-              Stress Result: Avg {stressResult.avgFps} FPS (Min {stressResult.minFps}) — {stressResult.passed ? 'PASS ✓' : 'CHECK ⚠'}
-            </div>
-          )}
-
-          {/* ── AI Best Fit ──────────────────────────────────────────────── */}
-          <div style={{ marginBottom: '8px', background: 'linear-gradient(135deg, #e8f8f2 0%, #d4f1e8 100%)',
-            border: '1.5px solid #1AA37A', borderRadius: '10px', padding: '14px' }}>
-            <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.6px', color: '#1AA37A',
-              textTransform: 'uppercase', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span>✦</span> AI Best Fit
-            </div>
-            <button onClick={onSuggestPlacement} disabled={isCalcSuggestion}
-              style={{ ...btnBase, marginBottom: '8px',
-                background: isCalcSuggestion ? '#a0d9c4' : 'linear-gradient(135deg, #1AA37A 0%, #13815f 100%)',
-                color: '#ffffff', border: 'none', cursor: isCalcSuggestion ? 'wait' : 'pointer',
-                opacity: isCalcSuggestion ? 0.8 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-              {isCalcSuggestion ? (
-                <><span style={{ display: 'inline-block', width: '14px', height: '14px',
-                  border: '2px solid rgba(255,255,255,0.4)', borderTop: '2px solid #fff',
-                  borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />Calculating…</>
-              ) : <>✦ Suggest Best Placement</>}
-            </button>
-            <button onClick={onSnapToSuggestion} disabled={!hasSuggestion || boxes.length === 0}
-              style={{ ...btnBase, marginBottom: 0,
-                background: hasSuggestion && boxes.length > 0 ? '#ffffff' : '#f5f5f5',
-                color: hasSuggestion && boxes.length > 0 ? '#1AA37A' : '#aaa',
-                border: `2px solid ${hasSuggestion && boxes.length > 0 ? '#1AA37A' : '#e0e0e0'}`,
-                cursor: hasSuggestion && boxes.length > 0 ? 'pointer' : 'not-allowed',
-                animation: hasSuggestion && boxes.length > 0 ? 'pulse-suggest 1.8s ease-in-out infinite' : 'none' }}>
-              ⬇ Snap Last Box to Suggestion
-            </button>
-            <div style={{ marginTop: '8px', fontSize: '11px', color: hasSuggestion ? '#1AA37A' : '#999', textAlign: 'center', fontStyle: 'italic' }}>
-              {hasSuggestion
-                ? `● Ghost preview visible in truck (${suggestionCount} ranked suggestion${suggestionCount === 1 ? '' : 's'})`
-                : 'No valid recommendation for current box'}
-            </div>
-
-            {/* US2: say which rotation won, so the ghost's pose is not a surprise.
-                US1: and how long the search took, against its 200 ms budget. */}
-            {hasSuggestion && searchDiagnostics && (
-              <div style={{ marginTop: '4px', fontSize: '10px', color: '#6c8a7e', textAlign: 'center' }}>
-                {suggestionOrientation ? `Orientation: ${suggestionOrientation} · ` : ''}
-                {searchDiagnostics.orientationsTried}/{searchDiagnostics.orientationsAvailable} rotations tried
-                {' · '}{Math.round(searchDiagnostics.elapsedMs)} ms
-              </div>
-            )}
-
-            {/* Why this spot — makes the ranking auditable instead of a black box */}
-            {hasSuggestion && suggestionReasons.length > 0 && (
-              <div style={{ marginTop: '8px', background: '#ffffff', border: '1px solid #cbe8dc',
-                borderRadius: '8px', padding: '8px 10px' }}>
-                <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.5px',
-                  color: '#13815f', textTransform: 'uppercase', marginBottom: '4px' }}>
-                  Why this spot
-                </div>
-                {suggestionReasons.map((reason) => (
-                  <div key={reason} style={{ display: 'flex', gap: '6px', fontSize: '11px',
-                    color: reason.startsWith('Warning') ? '#c0392b' : '#495057', lineHeight: 1.5 }}>
-                    <span aria-hidden="true">{reason.startsWith('Warning') ? '⚠' : '✓'}</span>
-                    <span>{reason}</span>
-                  </div>
-                ))}
-              </div>
-            )}
+        {/* ── 3. AI Best Fit ──────────────────────────────────────────────── */}
+        <section className="section ai-card">
+          <div className="section-title">
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="sparkles" size={13} /> AI best fit</span>
           </div>
-
-          {selectedGroupCount > 0 && (
-            <div style={{
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              marginBottom: '12px', padding: '10px 12px', background: '#eef2ff',
-              borderRadius: '8px', fontSize: '12px', fontWeight: 600, color: '#4338ca'
-            }}>
-              <span>Group selected: {selectedGroupCount} boxes</span>
-              <button
-                type="button"
-                onClick={onClearGroup}
-                style={{
-                  background: '#ffffff', border: '1px solid #c7d2fe', color: '#4338ca',
-                  borderRadius: '6px', cursor: 'pointer', fontSize: '11px', padding: '4px 10px'
-                }}
-              >
-                Clear
-              </button>
-            </div>
-          )}
-
-          {/* Session summary */}
-          <button type="button" onClick={onFinishSession} disabled={boxes.length === 0}
-            style={{ ...btnBase,
-              background: boxes.length > 0 ? 'linear-gradient(135deg, #f39c12, #e67e22)' : '#f5f5f5',
-              color: boxes.length > 0 ? '#ffffff' : '#aaa', border: 'none',
-              cursor: boxes.length === 0 ? 'not-allowed' : 'pointer',
-              opacity: boxes.length === 0 ? 0.5 : 1, fontWeight: 700 }}>
-            📊 Finish Session / View Results
-          </button>
-
-          {/* Clear All */}
-          <button onClick={clearBoxes} disabled={boxes.length === 0}
-            style={{ ...btnBase, background: '#ffffff', color: '#666', border: '2px solid #e0e0e0',
-              cursor: boxes.length === 0 ? 'not-allowed' : 'pointer', opacity: boxes.length === 0 ? 0.5 : 1 }}>
-            Clear All Boxes
-          </button>
-
-          {/* Export Load Plan */}
-          <button onClick={exportLoadPlan} disabled={boxes.length === 0}
-            style={{ ...btnBase, background: '#004E89', color: '#ffffff', border: 'none',
-              cursor: boxes.length === 0 ? 'not-allowed' : 'pointer', opacity: boxes.length === 0 ? 0.5 : 1 }}>
-            Export Load Plan
-          </button>
-
-          {/* Undo / Redo */}
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-            <button onClick={undo} disabled={historyIndex < 0}
-              style={{ flex: 1, padding: '12px 16px', background: '#ffffff',
-                color: historyIndex < 0 ? '#ccc' : '#667eea',
-                border: `2px solid ${historyIndex < 0 ? '#e0e0e0' : '#667eea'}`,
-                borderRadius: '8px', fontSize: '14px', fontWeight: 600,
-                cursor: historyIndex < 0 ? 'not-allowed' : 'pointer',
-                opacity: historyIndex < 0 ? 0.5 : 1, transition: 'all 0.2s ease' }}>
-              ↶ Undo
-            </button>
-            <button onClick={redo} disabled={historyIndex >= history.length - 1}
-              style={{ flex: 1, padding: '12px 16px', background: '#ffffff',
-                color: historyIndex >= history.length - 1 ? '#ccc' : '#667eea',
-                border: `2px solid ${historyIndex >= history.length - 1 ? '#e0e0e0' : '#667eea'}`,
-                borderRadius: '8px', fontSize: '14px', fontWeight: 600,
-                cursor: historyIndex >= history.length - 1 ? 'not-allowed' : 'pointer',
-                opacity: historyIndex >= history.length - 1 ? 0.5 : 1, transition: 'all 0.2s ease' }}>
-              Redo ↷
-            </button>
-          </div>
-
-          {/* Rotate Box — while dragging, or when orientation panel is open */}
           <button
             type="button"
-            onClick={() => (onRotateBox ? onRotateBox() : dragControllerRef.current?.rotateSelected())}
-            disabled={!isBoxDragging && !orientEntry}
-            style={{ ...btnBase, background: '#ffffff',
-              color: (isBoxDragging || orientEntry) ? '#1AA37A' : '#aaa',
-              border: `2px solid ${(isBoxDragging || orientEntry) ? '#1AA37A' : '#e0e0e0'}`,
-              cursor: (isBoxDragging || orientEntry) ? 'pointer' : 'not-allowed', marginBottom: '16px' }}>
-            ↻ Rotate Box 90° (R)
+            className="btn btn-success btn-block"
+            onClick={onSuggestPlacement}
+            disabled={isCalcSuggestion}
+          >
+            {isCalcSuggestion
+              ? <><span className="spinner" /> Calculating…</>
+              : <><Icon name="sparkles" /> Suggest best placement</>}
           </button>
-
-          {/* Camera Views */}
-          <div style={{ marginBottom: '8px' }}>
-            <h4 style={{ margin: '0 0 8px 0', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', color: '#666' }}>
-              Camera Views
-            </h4>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              {['top', 'side', 'back', 'default'].map(view => (
-                <button key={view} onClick={() => handleCameraView(view)}
-                  style={{ flex: 1, padding: '8px 0', background: '#f8f9fa', color: '#495057',
-                    border: '1px solid #dee2e6', borderRadius: '6px', fontSize: '12px', fontWeight: 600,
-                    cursor: 'pointer', textTransform: 'capitalize', transition: 'all 0.2s ease' }}>
-                  {view}
-                </button>
-              ))}
-            </div>
+          <button
+            type="button"
+            className="btn btn-block btn-pulse"
+            style={{ marginTop: 8, color: canSnap ? 'var(--success)' : undefined, borderColor: canSnap ? 'var(--success)' : undefined }}
+            onClick={onSnapToSuggestion}
+            disabled={!canSnap}
+          >
+            <Icon name="target" /> Snap last box to suggestion
+          </button>
+          <div className={`ai-status${hasSuggestion ? ' ok' : ''}`}>
+            {hasSuggestion
+              ? `Ghost preview shown in the trailer · ${suggestionCount} ranked option${suggestionCount === 1 ? '' : 's'}`
+              : 'Add a box, then ask for a suggestion'}
           </div>
 
-        </div>
-      )}
-    </div>
+          {/* US2: say which rotation won; US1: and how long the search took */}
+          {hasSuggestion && searchDiagnostics && (
+            <div className="ai-diag">
+              {suggestionOrientation ? `Orientation: ${suggestionOrientation} · ` : ''}
+              {searchDiagnostics.orientationsTried}/{searchDiagnostics.orientationsAvailable} rotations tried
+              {' · '}{Math.round(searchDiagnostics.elapsedMs)} ms
+            </div>
+          )}
+
+          {/* Why this spot — makes the ranking auditable instead of a black box */}
+          {hasSuggestion && suggestionReasons.length > 0 && (
+            <div className="reasons">
+              <div className="section-title" style={{ marginBottom: 4 }}>Why this spot</div>
+              {suggestionReasons.map((reason) => {
+                const warn = reason.startsWith('Warning');
+                return (
+                  <div key={reason} className={`reason${warn ? ' warn' : ''}`}>
+                    <Icon name={warn ? 'alert' : 'check'} size={13} style={{ marginTop: 3, flexShrink: 0 }} />
+                    <span>{reason}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        {/* ── 4. Arrange ──────────────────────────────────────────────────── */}
+        <section className="section">
+          <div className="section-title">Arrange</div>
+          {selectedGroupCount > 0 && (
+            <div className="callout callout-group" style={{ marginBottom: 8 }}>
+              <span>{selectedGroupCount} boxes grouped</span>
+              <button type="button" className="btn btn-sm" onClick={onClearGroup}>Clear</button>
+            </div>
+          )}
+          <button
+            type="button"
+            className="btn btn-block"
+            onClick={() => (onRotateBox ? onRotateBox() : dragControllerRef.current?.rotateSelected())}
+            disabled={!canRotate}
+            title={canRotate ? 'Rotate 90°' : 'Drag a box or double-click one to rotate it'}
+          >
+            <Icon name="rotate" /> Rotate box 90° <kbd>R</kbd>
+          </button>
+
+          <div className="section-title" style={{ marginTop: 16 }}>Camera</div>
+          <div className="segmented">
+            {['default', 'top', 'side', 'back'].map(view => (
+              <button key={view} type="button" onClick={() => handleCameraView(view)}>
+                {view === 'default' ? '3D' : view}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* US6 Yash: Stress Test — a developer tool, so tucked away */}
+        <details className="dev-tools">
+          <summary>Developer tools</summary>
+          <button type="button" className="btn btn-block btn-sm" onClick={runStressTest} disabled={isStressTestRunning}>
+            <Icon name="gauge" /> {isStressTestRunning ? 'Running 55-box stress test…' : 'Run 55-box stress test'}
+          </button>
+          {stressResult && (
+            <div style={{ marginTop: 6, color: stressResult.passed ? 'var(--success)' : 'var(--warning)', fontWeight: 600 }}>
+              Avg {stressResult.avgFps} FPS (min {stressResult.minFps}) — {stressResult.passed ? 'pass' : 'check'}
+            </div>
+          )}
+        </details>
+      </div>
+
+      <div className="sidebar-footer">
+        <button type="button" className="btn btn-primary" onClick={onFinishSession} disabled={!hasBoxes}>
+          <Icon name="flag" /> Finish &amp; see results
+        </button>
+        <button type="button" className="btn" onClick={exportLoadPlan} disabled={!hasBoxes}>
+          <Icon name="download" /> Export
+        </button>
+        <button type="button" className="btn btn-danger-text" onClick={clearBoxes} disabled={!hasBoxes}>
+          <Icon name="trash" /> Clear all
+        </button>
+      </div>
+    </aside>
   );
 };
 

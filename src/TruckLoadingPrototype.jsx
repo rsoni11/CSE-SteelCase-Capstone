@@ -9,7 +9,8 @@ import {
   MAX_BOXES,
   DECK_SURFACE_Y,
   STRESS_TEST_TARGET,         // US6 Yash
-  HEAVY_BOX_MASS_THRESHOLD    // US5 Rhea
+  HEAVY_BOX_MASS_THRESHOLD,   // US5 Rhea
+  DEFAULT_CAMERA_POSITION
 } from './constants';
 import { STEELCASE_LOAD_EXAMPLES } from './loadExamples';   // US1 Yash
 import { initScene } from './TruckScene';
@@ -24,6 +25,7 @@ import ShipmentSummary from './ShipmentSummary';             // Becky
 import SessionSummaryModal from './SessionSummaryModal';
 import SessionCompleteScreen from './SessionCompleteScreen';
 import OrientationWidget from './OrientationWidget';
+import Icon from './Icons';
 import { StabilitySystem } from './StabilitySystem';
 
 // ── US5 Rhea: floating FRAGILE sprite ─────────────────────────────────────
@@ -101,6 +103,7 @@ const TruckLoadingPrototype = () => {
   const [fragileWarning, setFragileWarning]           = useState(null);
   const [orientEntry, setOrientEntry]                 = useState(null);
   const [orientWidgetPos, setOrientWidgetPos]         = useState({ x: 0, y: 0 });
+  const [openStagePanel, setOpenStagePanel]           = useState(null); // 'controls' | 'shipment' | null
   const [stabilityWarning, setStabilityWarning]       = useState(null);
   const [selectedGroupIds, setSelectedGroupIds]       = useState([]);
   const [showSessionComplete, setShowSessionComplete] = useState(false);
@@ -389,7 +392,7 @@ const TruckLoadingPrototype = () => {
     if      (view === 'top')  c.position.set(0, 80, 0.1);
     else if (view === 'side') c.position.set(0, 5, 60);
     else if (view === 'back') c.position.set(-60, 8, 0);
-    else                      c.position.set(20, 25, 40);
+    else                      c.position.set(DEFAULT_CAMERA_POSITION.x, DEFAULT_CAMERA_POSITION.y, DEFAULT_CAMERA_POSITION.z);
   };
 
   // ── Create Physics Body ────────────────────────────────────────────────────
@@ -998,35 +1001,11 @@ const TruckLoadingPrototype = () => {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div style={{
-      width: '100vw', height: '100vh', margin: 0, padding: 0, overflow: 'hidden',
-      fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-      background: '#ffffff'
-    }}>
+    <div className="app">
       <Header
         stats={stats} usedVolume={usedVolume} volumePercentage={volumePercentage}
         isBoxDragging={isBoxDragging} historyIndex={historyIndex} history={history}
-        undo={undo} redo={redo} selectedExampleName={selectedExampleName} stressResult={stressResult}
-      />
-
-      {/* 3D Canvas */}
-      <div ref={mountRef} style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }} />
-
-      {/* Loading overlay */}
-      {isLoading && (
-        <div style={{ position: 'absolute', inset: 0, background: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ width: '40px', height: '40px', border: '3px solid #e0e0e0', borderTop: '3px solid #004E89', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 16px' }} />
-            <p style={{ color: '#666', fontSize: '14px' }}>Loading 3D Environment...</p>
-          </div>
-        </div>
-      )}
-
-      {/* Becky: Shipment Summary panel */}
-      <ShipmentSummary
-        availableBoxes={availableBoxes}
-        activeStopFilter={activeStopFilter}
-        setActiveStopFilter={setActiveStopFilter}
+        undo={handleUndo} redo={handleRedo} selectedExampleName={selectedExampleName} stressResult={stressResult}
       />
 
       <ControlPanel
@@ -1037,10 +1016,6 @@ const TruckLoadingPrototype = () => {
         addBox={addBox}
         clearBoxes={clearBoxes}
         exportLoadPlan={exportLoadPlan}
-        historyIndex={historyIndex}
-        history={history}
-        undo={handleUndo}
-        redo={handleRedo}
         isBoxDragging={isBoxDragging}
         orientEntry={orientEntry}
         onRotateBox={handleRotateBox}
@@ -1049,7 +1024,6 @@ const TruckLoadingPrototype = () => {
         handleCSVUpload={handleCSVUpload}
         loadExamples={STEELCASE_LOAD_EXAMPLES}
         onSelectLoadExample={handleLoadExampleSelect}
-        selectedExampleName={selectedExampleName}
         selectedExampleId={selectedExampleId}
         queueCount={boxQueue.length}
         queueSummary={queueSummary}
@@ -1073,6 +1047,73 @@ const TruckLoadingPrototype = () => {
         onClearGroup={handleClearGroup}
       />
 
+      <main className="stage">
+        {/* 3D Canvas */}
+        <div ref={mountRef} className="stage-canvas" />
+
+        <div className="stage-toolbar">
+          <ControlsGuide
+            isOpen={openStagePanel === 'controls'}
+            onToggle={() => setOpenStagePanel(p => (p === 'controls' ? null : 'controls'))}
+          />
+          {/* Becky: Shipment Summary panel */}
+          <ShipmentSummary
+            availableBoxes={availableBoxes}
+            activeStopFilter={activeStopFilter}
+            setActiveStopFilter={setActiveStopFilter}
+            isOpen={openStagePanel === 'shipment'}
+            onToggle={() => setOpenStagePanel(p => (p === 'shipment' ? null : 'shipment'))}
+          />
+        </div>
+
+        {!isLoading && boxes.length === 0 && !fragileWarning && !stabilityWarning && (
+          <div className="empty-state">
+            <Icon name="box" size={18} />
+            <span>
+              {boxQueue.length > 0
+                ? <><strong>{boxQueue.length} boxes</strong> are queued. Press <strong>Add next box</strong> to start loading.</>
+                : <>Pick a load example or upload a CSV to start loading.</>}
+            </span>
+          </div>
+        )}
+
+        {/* US5 Rhea: fragile stacking warning; stability warning */}
+        {(fragileWarning || stabilityWarning) && (
+          <div className="toast-stack" role="status" aria-live="polite">
+            {fragileWarning && (
+              <div className="toast toast-danger">
+                <Icon name="alert" className="toast-icon" />
+                <span className="toast-msg">{fragileWarning}</span>
+                <button type="button" className="btn btn-ghost btn-icon" aria-label="Dismiss" onClick={() => setFragileWarning(null)}>
+                  <Icon name="x" size={14} />
+                </button>
+              </div>
+            )}
+            {stabilityWarning && (
+              <div className={`toast ${stabilityWarning.status === 'blocked' ? 'toast-danger' : 'toast-warning'}`}>
+                <Icon name="alert" className="toast-icon" />
+                <span className="toast-msg">{stabilityWarning.message}</span>
+                {stabilityWarning.status !== 'blocked' && (
+                  <button type="button" className="btn btn-ghost btn-icon" aria-label="Dismiss" onClick={() => setStabilityWarning(null)}>
+                    <Icon name="x" size={14} />
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Loading overlay */}
+        {isLoading && (
+          <div className="loading">
+            <div>
+              <div className="loading-spinner" />
+              Loading 3D environment…
+            </div>
+          </div>
+        )}
+      </main>
+
       {orientEntry && (
         <OrientationWidget
           selectedBox={orientEntry}
@@ -1081,26 +1122,6 @@ const TruckLoadingPrototype = () => {
           setSelectedBox={setOrientEntry}
           onPhysicsSync={syncOrientPhysics}
         />
-      )}
-
-      <ControlsGuide />
-
-      {/* US5 Rhea: fragile stacking warning toast */}
-      {fragileWarning && (
-        <div style={{
-          position: 'absolute', bottom: '32px', left: '50%', transform: 'translateX(-50%)',
-          background: 'linear-gradient(135deg, #e74c3c, #c0392b)', color: '#fff',
-          borderRadius: '12px', padding: '14px 24px', fontSize: '14px', fontWeight: 700,
-          boxShadow: '0 6px 24px rgba(231,76,60,0.45)', zIndex: 50,
-          maxWidth: '520px', textAlign: 'center', animation: 'toastSlideUp 0.3s ease'
-        }}>
-          {fragileWarning}
-          <button onClick={() => setFragileWarning(null)} style={{
-            marginLeft: '16px', background: 'rgba(255,255,255,0.25)', border: 'none',
-            borderRadius: '6px', color: '#fff', padding: '2px 10px', cursor: 'pointer',
-            fontSize: '13px', fontWeight: 700
-          }}>✕</button>
-        </div>
       )}
 
       <SessionSummaryModal
@@ -1114,51 +1135,6 @@ const TruckLoadingPrototype = () => {
         }}
       />
 
-      {stabilityWarning && (
-        <div style={{
-          position: 'absolute',
-          bottom: fragileWarning ? '88px' : '32px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          background: stabilityWarning.status === 'blocked'
-            ? 'linear-gradient(135deg, #c0392b, #922b21)'
-            : 'linear-gradient(135deg, #f39c12, #d68910)',
-          color: '#fff',
-          borderRadius: '12px',
-          padding: '14px 24px',
-          fontSize: '14px',
-          fontWeight: 700,
-          boxShadow: stabilityWarning.status === 'blocked'
-            ? '0 6px 24px rgba(192,57,43,0.5)'
-            : '0 6px 24px rgba(243,156,18,0.5)',
-          zIndex: 51,
-          maxWidth: '560px',
-          textAlign: 'center',
-          animation: 'toastSlideUp 0.3s ease'
-        }}>
-          {stabilityWarning.message}
-          {stabilityWarning.status !== 'blocked' && (
-            <button
-              type="button"
-              onClick={() => setStabilityWarning(null)}
-              style={{
-                marginLeft: '16px',
-                background: 'rgba(255,255,255,0.25)',
-                border: 'none',
-                borderRadius: '6px',
-                color: '#fff',
-                padding: '2px 10px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                fontWeight: 700
-              }}
-            >
-              ✕
-            </button>
-          )}
-        </div>
-      )}
-
       {showSessionComplete && (
         <SessionCompleteScreen
           usedVolume={usedVolume}
@@ -1167,18 +1143,6 @@ const TruckLoadingPrototype = () => {
           onDismiss={() => setShowSessionComplete(false)}
         />
       )}
-
-      <style>{`
-        @keyframes spin { 0% { transform:rotate(0deg) } 100% { transform:rotate(360deg) } }
-        @keyframes pulse-suggest {
-          0%,100% { box-shadow:0 0 0 0 rgba(26,163,122,0.5) }
-          50%      { box-shadow:0 0 0 6px rgba(26,163,122,0) }
-        }
-        @keyframes toastSlideUp {
-          from { transform:translateX(-50%) translateY(20px); opacity:0 }
-          to   { transform:translateX(-50%) translateY(0);    opacity:1 }
-        }
-      `}</style>
     </div>
   );
 };

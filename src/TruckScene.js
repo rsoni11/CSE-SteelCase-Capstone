@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
-import { TRUCK_DIMENSIONS } from './constants';
+import { TRUCK_DIMENSIONS, DEFAULT_CAMERA_POSITION } from './constants';
 import { CollisionSystem } from './CollisionSystem';
 import { DragController } from './DragController';
 
@@ -20,7 +20,9 @@ export function initScene({
   afterPositionChanged,
 }) {
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xf5f5f5);
+  scene.background = new THREE.Color(0xe9edf2);
+  // Fade the far ground into the background so the trailer stands out
+  scene.fog = new THREE.Fog(0xe9edf2, 90, 220);
 
   const camera = new THREE.PerspectiveCamera(
     60,
@@ -28,7 +30,7 @@ export function initScene({
     0.1,
     1000
   );
-  camera.position.set(20, 25, 40);
+  camera.position.set(DEFAULT_CAMERA_POSITION.x, DEFAULT_CAMERA_POSITION.y, DEFAULT_CAMERA_POSITION.z);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(mountEl.clientWidth, mountEl.clientHeight);
@@ -45,7 +47,9 @@ export function initScene({
   controls.maxPolarAngle = Math.PI / 2;
   controls.target.set(0, TRUCK_DIMENSIONS.height / 2, 0);
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+  scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+  // Sky/ground fill gives box faces different shades, so they read as solid
+  scene.add(new THREE.HemisphereLight(0xffffff, 0xb8c2cc, 0.55));
 
   const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9);
   directionalLight.position.set(20, 30, 20);
@@ -94,9 +98,9 @@ export function initScene({
   const floor = new THREE.Mesh(
     floorGeometry,
     new THREE.MeshStandardMaterial({
-      color: 0x8b7355,
-      roughness: 0.8,
-      metalness: 0.2
+      color: 0xb9946a,
+      roughness: 0.85,
+      metalness: 0.05
     })
   );
   floor.position.y = 0.1;
@@ -104,12 +108,13 @@ export function initScene({
   truckGroup.add(floor);
 
   const visualWallMaterial = new THREE.MeshStandardMaterial({
-    color: 0xc0c0c0,
-    roughness: 0.7,
-    metalness: 0.3,
+    color: 0xdfe6ee,
+    roughness: 0.4,
+    metalness: 0.1,
     transparent: true,
-    opacity: 0.3,
-    side: THREE.DoubleSide
+    opacity: 0.14,
+    side: THREE.DoubleSide,
+    depthWrite: false
   });
 
   const sideWallGeometry = new THREE.BoxGeometry(
@@ -154,10 +159,42 @@ export function initScene({
 
   const floorEdges = new THREE.LineSegments(
     new THREE.EdgesGeometry(floorGeometry),
-    new THREE.LineBasicMaterial({ color: 0x000000 })
+    new THREE.LineBasicMaterial({ color: 0x5c4630 })
   );
   floorEdges.position.copy(floor.position);
   truckGroup.add(floorEdges);
+
+  // Outline the trailer volume so its walls read clearly while staying see-through
+  const shellEdges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(
+      TRUCK_DIMENSIONS.length, TRUCK_DIMENSIONS.height, TRUCK_DIMENSIONS.width
+    )),
+    new THREE.LineBasicMaterial({ color: 0x004e89, transparent: true, opacity: 0.55 })
+  );
+  shellEdges.position.y = TRUCK_DIMENSIONS.height / 2;
+  truckGroup.add(shellEdges);
+
+  // Visual-only cab at the front (+x) end so it is obvious which way the trailer faces
+  const cabMaterial = new THREE.MeshStandardMaterial({ color: 0xf3f5f8, roughness: 0.5, metalness: 0.2 });
+  const cabTrim = new THREE.MeshStandardMaterial({ color: 0x004e89, roughness: 0.5, metalness: 0.2 });
+  const cabGlass = new THREE.MeshStandardMaterial({ color: 0x9fc3e0, roughness: 0.1, metalness: 0.6 });
+  const cab = new THREE.Group();
+  const cabBody = new THREE.Mesh(new THREE.BoxGeometry(7, 7.5, TRUCK_DIMENSIONS.width - 0.4), cabMaterial);
+  cabBody.position.set(0, 3.75, 0);
+  cabBody.castShadow = true;
+  cab.add(cabBody);
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(3, 3.2, TRUCK_DIMENSIONS.width - 1), cabMaterial);
+  hood.position.set(4.9, 1.6, 0);
+  hood.castShadow = true;
+  cab.add(hood);
+  const windshield = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.4, TRUCK_DIMENSIONS.width - 1.2), cabGlass);
+  windshield.position.set(3.52, 5.4, 0);
+  cab.add(windshield);
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(7.05, 0.6, TRUCK_DIMENSIONS.width - 0.35), cabTrim);
+  stripe.position.set(0, 2.2, 0);
+  cab.add(stripe);
+  cab.position.set(TRUCK_DIMENSIONS.length / 2 + 4.5, 0, 0);
+  truckGroup.add(cab);
 
   scene.add(truckGroup);
 
@@ -262,14 +299,17 @@ export function initScene({
 
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(200, 200),
-    new THREE.MeshStandardMaterial({ color: 0xe0e0e0, roughness: 0.9 })
+    new THREE.MeshStandardMaterial({ color: 0xdde3ea, roughness: 0.95 })
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.1;
   ground.receiveShadow = true;
   scene.add(ground);
 
-  const gridHelper = new THREE.GridHelper(120, 60, 0xcccccc, 0xdddddd);
+  // Faint 2 ft grid around the dock only, so it guides placement without cluttering the view
+  const gridHelper = new THREE.GridHelper(120, 60, 0xc5cdd6, 0xc5cdd6);
+  gridHelper.material.transparent = true;
+  gridHelper.material.opacity = 0.35;
   gridHelper.position.y = 0;
   scene.add(gridHelper);
 
@@ -342,19 +382,23 @@ export function initScene({
   };
 
   const handleResize = () => {
-    if (!mountEl) return;
+    if (!mountEl || !mountEl.clientWidth || !mountEl.clientHeight) return;
     camera.aspect = mountEl.clientWidth / mountEl.clientHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(mountEl.clientWidth, mountEl.clientHeight);
   };
 
   window.addEventListener('resize', handleResize);
+  // The canvas sits in a grid cell, so it can change size without the window resizing
+  const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(handleResize) : null;
+  resizeObserver?.observe(mountEl);
   animate();
   setTimeout(() => setIsLoading(false), 100);
 
   const cleanup = () => {
     if (animationFrameId) cancelAnimationFrame(animationFrameId);
     window.removeEventListener('resize', handleResize);
+    resizeObserver?.disconnect();
     controls.dispose();
     dragController.destroy();
     for (const entry of cargoRegistry) {

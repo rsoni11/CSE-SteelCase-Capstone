@@ -1,7 +1,11 @@
 import React from 'react';
 import { TRUCK_VOLUME } from './constants';
+import Icon from './Icons';
 
-// Top header bar with title, stats, and undo/redo buttons
+// FPS is a developer number; show it only with ?debug in the URL.
+const SHOW_DEBUG = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debug');
+
+// Top bar: title, load stats, and undo/redo
 const Header = ({
   stats,
   usedVolume,
@@ -14,83 +18,61 @@ const Header = ({
   selectedExampleName,
   stressResult
 }) => {
+  const pct = Math.min(100, Number(volumePercentage) || 0);
+  const canUndo = historyIndex >= 0;
+  const canRedo = historyIndex < history.length - 1;
+
   return (
-    <div style={{
-      position: 'absolute', top: 0, left: 0, right: 0,
-      padding: '20px 30px',
-      background: 'linear-gradient(to bottom, rgba(255,255,255,0.98), rgba(255,255,255,0.92))',
-      backdropFilter: 'blur(10px)',
-      borderBottom: '1px solid rgba(0,0,0,0.1)',
-      zIndex: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center'
-    }}>
-      {/* Title */}
-      <div>
-        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 700, color: '#1a1a1a', letterSpacing: '-0.5px' }}>
-          Truck Loading Simulator
-        </h1>
-        <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#666', fontWeight: 400 }}>
-          53' × 8.5' × 9' Standard Trailer
-        </p>
-        <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#004E89', fontWeight: 600 }}>
-          Example: {selectedExampleName}
-        </p>
+    <header className="header">
+      <div className="brand">
+        <div className="brand-mark"><Icon name="truck" size={20} /></div>
+        <div style={{ minWidth: 0 }}>
+          <h1 className="brand-title">Truck Loading Simulator</h1>
+          <div className="brand-sub">
+            53′ × 8.5′ × 9′ trailer{selectedExampleName ? ` · ${selectedExampleName}` : ''}
+          </div>
+        </div>
       </div>
 
-      {/* Stats + controls */}
-      <div style={{ display: 'flex', gap: '20px', fontSize: '13px', color: '#666', alignItems: 'center' }}>
-        <div>
-          <strong style={{ color: stats.fps >= 60 ? '#1AA37A' : '#FF6B35' }}>{stats.fps || 60} FPS</strong>
-        </div>
-        <div>Boxes: <strong>{stats.boxCount || 0}</strong></div>
-
-        {/* Space utilization */}
-        <div style={{ background: 'rgba(0,0,0,0.05)', padding: '4px 10px', borderRadius: '6px' }}>
-          Space Used: <strong>{usedVolume.toFixed(2)} ft³</strong> / {TRUCK_VOLUME} ft³
-          <strong style={{ color: '#004E89', marginLeft: '6px' }}>({volumePercentage}%)</strong>
-        </div>
-
-        {/* Undo / Redo buttons */}
-        <div style={{ display: 'flex', gap: '6px' }}>
-          <button
-            onClick={undo}
-            disabled={historyIndex < 0}
-            title="Undo (Ctrl+Z)"
-            style={{
-              padding: '6px 14px', background: '#fff',
-              color: historyIndex < 0 ? '#ccc' : '#667eea',
-              border: `2px solid ${historyIndex < 0 ? '#e0e0e0' : '#667eea'}`,
-              borderRadius: '8px', fontSize: '14px', fontWeight: 700,
-              cursor: historyIndex < 0 ? 'not-allowed' : 'pointer',
-              transition: 'all 0.15s ease'
-            }}
-          >↶</button>
-          <button
-            onClick={redo}
-            disabled={historyIndex >= history.length - 1}
-            title="Redo (Ctrl+Y)"
-            style={{
-              padding: '6px 14px', background: '#fff',
-              color: historyIndex >= history.length - 1 ? '#ccc' : '#667eea',
-              border: `2px solid ${historyIndex >= history.length - 1 ? '#e0e0e0' : '#667eea'}`,
-              borderRadius: '8px', fontSize: '14px', fontWeight: 700,
-              cursor: historyIndex >= history.length - 1 ? 'not-allowed' : 'pointer',
-              transition: 'all 0.15s ease'
-            }}
-          >↷</button>
-        </div>
-
+      <div className="header-stats">
         {isBoxDragging && (
-          <div><strong style={{ color: '#9B59B6' }}>● Dragging</strong></div>
+          <span className="status-pill hide-sm"><span className="status-dot" />Moving box</span>
         )}
         {stressResult && (
-          <div>
-            <strong style={{ color: stressResult.passed ? '#1AA37A' : '#FF6B35' }}>
-              Stress Avg {stressResult.avgFps} FPS
-            </strong>
+          <span className={`status-pill hide-md ${stressResult.passed ? 'ok' : 'warn'}`}>
+            Stress test: {stressResult.avgFps} FPS avg
+          </span>
+        )}
+        {SHOW_DEBUG && (
+          <div className="stat hide-sm">
+            <span className="stat-label">FPS</span>
+            <span className="stat-value">{stats.fps || '–'}</span>
           </div>
         )}
+        <div className="stat">
+          <span className="stat-label">Boxes</span>
+          <span className="stat-value">{stats.boxCount || 0}</span>
+        </div>
+        <div className="stat fill" title={`${usedVolume.toFixed(1)} of ${TRUCK_VOLUME} ft³ used`}>
+          <div className="fill-row">
+            <span className="stat-label">Trailer fill</span>
+            <span className="stat-value">{pct.toFixed(1)}%</span>
+          </div>
+          <div className="progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+            <div className="progress-bar" style={{ width: `${pct}%` }} />
+          </div>
+        </div>
       </div>
-    </div>
+
+      <div className="header-actions">
+        <button type="button" className="btn btn-icon" onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)" aria-label="Undo">
+          <Icon name="undo" />
+        </button>
+        <button type="button" className="btn btn-icon" onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Y)" aria-label="Redo">
+          <Icon name="redo" />
+        </button>
+      </div>
+    </header>
   );
 };
 

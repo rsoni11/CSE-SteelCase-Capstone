@@ -68,3 +68,6 @@ export const TRUCK_VOLUME =
 
 export const MAX_BOXES = 75;
 export const STRESS_TEST_TARGET = 55; // US6
+
+// Default 3D camera: from the rear quarter, far enough back to frame the whole trailer
+export const DEFAULT_CAMERA_POSITION = { x: -12, y: 26, z: 44 };
