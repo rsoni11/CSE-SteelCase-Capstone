@@ -623,12 +623,63 @@ const TruckLoadingPrototype = () => {
 
     // US5: check stacking after state settles
     setTimeout(() => checkFragileStacking(entry), 100);
-    return true;
+    return entry;
   }, [checkFragileStacking]);
 
+  // Move a carton into a solved pose: position, the winning rotation, its
+  // world-aligned size, and the physics body to match.
+  const applyPlacement = useCallback((entry, target) => {
+    entry.mesh.position.copy(target.position);
+    // US2 task 3: apply the winning rotation to the real mesh, so the carton
+    // ends up in the orientation the preview promised.
+    if (target.quaternion) entry.mesh.quaternion.copy(target.quaternion);
+    entry.size.x = target.size.x; entry.size.y = target.size.y; entry.size.z = target.size.z;
+    if (entry.body) {
+      entry.body.position.set(target.position.x, target.position.y, target.position.z);
+      entry.body.quaternion.set(
+        entry.mesh.quaternion.x,
+        entry.mesh.quaternion.y,
+        entry.mesh.quaternion.z,
+        entry.mesh.quaternion.w
+      );
+      entry.body.velocity.set(0, 0, 0);
+      entry.body.angularVelocity.set(0, 0, 0);
+      // Put it to sleep rather than waking it: the placement is already a
+      // resting, collision-free pose, so handing it to the solver awake just
+      // let it be nudged off the stack and settle somewhere slightly wrong.
+      // Contact from a dragged carton still wakes it normally.
+      entry.body.sleep();
+    }
+  }, []);
+
+  // Add a carton straight into the AI Best Fit spot instead of the spawn grid.
+  // If nothing fits (or the spot fails the stability check) it stays where it
+  // spawned, and the ghost/Snap flow still works as before.
+  const addBoxAtBestFit = useCallback((boxType) => {
+    const entry = addBoxFromType(boxType);
+    if (!entry || !fitSuggestionRef.current) return entry;
+
+    const dims = entry.dimensions;
+    const target = fitSuggestionRef.current.findBestFit(
+      { x: dims.width, y: dims.height, z: dims.depth },
+      {
+        mass: entry.physics?.mass ?? estimateMass(entry.size),
+        fragile: entry.fragile ?? false,
+        exclude: [entry]
+      }
+    );
+    if (target &&
+        withinBounds(target.position, target.size, TRUCK_DIMENSIONS) &&
+        checkStabilityOnPlace(target.position, target.size)) {
+      applyPlacement(entry, target);
+      setLayoutVersion(prev => prev + 1);
+    }
+    return entry;
+  }, [addBoxFromType, applyPlacement, checkStabilityOnPlace]);
+
   const addBox = useCallback(() => {
-    addBoxFromType(selectedBoxType);
-  }, [selectedBoxType, addBoxFromType]);
+    addBoxAtBestFit(selectedBoxType);
+  }, [selectedBoxType, addBoxAtBestFit]);
 
   // ── Export Load Plan ───────────────────────────────────────────────────────
   const exportLoadPlan = () => {
@@ -722,7 +773,7 @@ const TruckLoadingPrototype = () => {
   const addNextQueuedBox = useCallback(() => {
     if (boxQueue.length === 0) { addBox(); return; }
     const nextType = boxQueue[0];
-    if (addBoxFromType(nextType)) {
+    if (addBoxAtBestFit(nextType)) {
       setBoxQueue(prev => {
         const updated = prev.slice(1);
         setQueueSummary(buildQueueSummary(updated));
@@ -730,7 +781,7 @@ const TruckLoadingPrototype = () => {
         return updated;
       });
     }
-  }, [boxQueue, addBox, addBoxFromType, buildQueueSummary]);
+  }, [boxQueue, addBox, addBoxAtBestFit, buildQueueSummary]);
 
   // Reorder the pending queue heaviest-first, fragile last. Arrival order — not
   // the scoring function — is what strands heavy cartons near the roof, because
@@ -942,27 +993,7 @@ const TruckLoadingPrototype = () => {
     if (!checkStabilityOnPlace(target.position, target.size)) return;
 
     const oldPos = lastEntry.mesh.position.clone();
-    lastEntry.mesh.position.copy(target.position);
-    // US2 task 3: apply the winning rotation to the real mesh, so the carton
-    // ends up in the orientation the preview promised.
-    if (target.quaternion) lastEntry.mesh.quaternion.copy(target.quaternion);
-    lastEntry.size.x = target.size.x; lastEntry.size.y = target.size.y; lastEntry.size.z = target.size.z;
-    if (lastEntry.body) {
-      lastEntry.body.position.set(target.position.x, target.position.y, target.position.z);
-      lastEntry.body.quaternion.set(
-        lastEntry.mesh.quaternion.x,
-        lastEntry.mesh.quaternion.y,
-        lastEntry.mesh.quaternion.z,
-        lastEntry.mesh.quaternion.w
-      );
-      lastEntry.body.velocity.set(0, 0, 0);
-      lastEntry.body.angularVelocity.set(0, 0, 0);
-      // Put it to sleep rather than waking it: the placement is already a
-      // resting, collision-free pose, so handing it to the solver awake just
-      // let it be nudged off the stack and settle somewhere slightly wrong.
-      // Contact from a dragged carton still wakes it normally.
-      lastEntry.body.sleep();
-    }
+    applyPlacement(lastEntry, target);
     saveToHistoryRef.current?.(lastEntry.mesh, oldPos, target.position);
     setLayoutVersion(prev => prev + 1);
     ghostPreviewRef.current?.hide();
@@ -970,7 +1001,7 @@ const TruckLoadingPrototype = () => {
     setSuggestionCandidates([]);
     suggestionTargetRef.current = null;
     setTimeout(() => checkFragileStacking(lastEntry), 100);
-  }, [suggestion, boxes.length, checkFragileStacking, checkStabilityOnPlace]);
+  }, [suggestion, boxes.length, checkFragileStacking, checkStabilityOnPlace, applyPlacement]);
 
   // Snapping can fall back to a full re-solve, so it gets the indicator too.
   const handleSnapToSuggestion = useCallback(() => {
