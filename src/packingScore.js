@@ -54,8 +54,9 @@ export const WEIGHTS = {
   contact: 34,        // reward for face contact with floor/walls/neighbours
   flush: 12,          // reward for the NUMBER of faces that are flush
   support: 30,        // penalty for an unsupported footprint
-  envelope: 14,       // penalty for growing the load's bounding box
-  span: 3,            // penalty for extending the load toward the door
+  corner: 8,          // reward per extra surface type touched (deck/wall/cargo)
+  envelope: 17,       // penalty for growing the load's bounding box
+  span: 4,            // penalty for extending the load toward the door
   depth: 7,           // mild bias toward filling the deep end first
   comHeight: 22,      // penalty for carrying mass high
   tipping: 28,        // penalty for a tall, narrow pose that would topple
@@ -384,6 +385,11 @@ export function scorePlacement(box, ctx) {
   // walls/neighbours earns the whole bonus; see FLUSH_FACE_TARGET.
   const flush = -WEIGHTS.flush *
     Math.min(1, contact.flushFaces / FLUSH_FACE_TARGET);
+  // How many KINDS of surface the carton is tucked against. Area and face
+  // count both let a spot on open deck score close to a corner tuck; a
+  // carton touching deck + wall + cargo at once is the Tetris-style fit.
+  const extraSurfaces = Math.max(0, surfaceTypes(contact).length - 1);
+  const corner = extraSurfaces ? -WEIGHTS.corner * extraSurfaces : 0;
   const unsupported = WEIGHTS.support * (1 - support.ratio);
   const floorBonus = support.onFloor ? -WEIGHTS.floorBonus : 0;
 
@@ -475,7 +481,7 @@ export function scorePlacement(box, ctx) {
   );
 
   const terms = {
-    snugness, flush, unsupported, floorBonus, envelope, span, depth,
+    snugness, flush, corner, unsupported, floorBonus, envelope, span, depth,
     comHeight, tipping, crush, fragileUnder, fragileColumn, balance
   };
 
@@ -545,11 +551,24 @@ export function suggestLoadOrder(items) {
     .map(({ item }) => item);
 }
 
+/** Which surface groups (deck, wall, cargo) the carton has real contact with. */
+function surfaceTypes(contact) {
+  const out = [];
+  if (contact.floor > 0) out.push('deck');
+  if (contact.walls > 0) out.push('wall');
+  if (contact.neighbours > 0) out.push('cargo');
+  return out;
+}
+
 /** Short human-readable notes so the UI can say *why* a spot was suggested. */
 function explain({ contact, support, terms, mass, fragile }) {
   const out = [];
   if (contact.ratio >= 0.45) out.push('Wedged tightly against surrounding cargo');
   else if (contact.ratio >= 0.25) out.push('Flush with nearby cargo');
+  if (terms.corner < 0) {
+    const types = surfaceTypes(contact);
+    out.push(`Corner tuck: touches ${types.slice(0, -1).join(', ')} and ${types[types.length - 1]}`);
+  }
   if (contact.flushFaces >= FLUSH_FACE_TARGET) out.push(`Flush on ${contact.flushFaces} faces`);
   if (support.onFloor) out.push('Rests flat on the deck');
   else if (support.ratio >= 0.95) out.push('Fully supported by the cartons below');

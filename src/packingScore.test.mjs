@@ -437,6 +437,22 @@ test('the flush term rewards a corner over open deck', () => {
   assert.equal(open.terms.flush, -WEIGHTS.flush / FLUSH_FACE_TARGET);
 });
 
+test('the corner term rewards touching deck, wall and cargo at once', () => {
+  const halfL = DEFAULT_TRUCK.length / 2;
+  const halfW = DEFAULT_TRUCK.width / 2;
+  const loaded = [onFloor(-halfL + 1, -halfW + 1, 2, 2, 2)];
+  // Same depth into the trailer: one tucked between the sidewall and the
+  // loaded carton, one out on open deck touching nothing but the floor.
+  const tuck = scorePlacement(onFloor(-halfL + 3, -halfW + 1, 2, 2, 2), ctx(loaded));
+  const open = scorePlacement(onFloor(-halfL + 3, 1, 2, 2, 2), ctx(loaded));
+
+  assert.equal(tuck.terms.corner, -2 * WEIGHTS.corner, 'deck + wall + cargo = two extra surfaces');
+  assert.equal(open.terms.corner, 0, 'deck alone earns nothing');
+  assert.ok(tuck.score < open.score, 'the corner tuck should clearly win');
+  assert.ok(tuck.reasons.some((r) => r.startsWith('Corner tuck')));
+  assert.ok(!open.reasons.some((r) => r.startsWith('Corner tuck')));
+});
+
 // ── US2: tip-over guard ──────────────────────────────────────────────────────
 
 test('a flat pose carries no tipping penalty', () => {
