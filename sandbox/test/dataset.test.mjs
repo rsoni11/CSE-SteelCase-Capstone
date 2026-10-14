@@ -81,8 +81,8 @@ test('scenario 1: accepted output has 0 missing required values', () => {
 });
 
 test('one bad row rejects the whole plan and leaves other plans alone', () => {
-  const good = fixture('valid-01-one-stop.csv').trim().split('\r\n');
-  const bad = fixture('invalid-04-nonfinite-coordinate.csv').trim().split('\r\n').slice(1);
+  const good = fixture('valid-01-one-stop.csv').trim().split(/\r?\n/);
+  const bad = fixture('invalid-04-nonfinite-coordinate.csv').trim().split(/\r?\n/).slice(1);
   const r = validateDataset([...good, ...bad].join('\r\n'));
   assert.deepEqual(r.accepted.map((p) => p.planId), ['fx-v1']);
   assert.deepEqual(r.rejected.map((p) => p.planId), ['fx-i4']);

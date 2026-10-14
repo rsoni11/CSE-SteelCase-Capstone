@@ -1,9 +1,12 @@
 {
   "name": "truck-loading-prototype",
   "version": "1.0.0",
-  "description": "3D Truck Loading Simulator - Sprint 1 Prototype",
+  "description": "3D truck loading simulator for Steelcase shipments",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "cannon-es": "^0.20.0",
     "react": "^18.2.0",
@@ -14,11 +17,19 @@
     "start": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/"
+    "test": "node --test src/*.test.mjs"
   },
   "browserslist": {
-    "production": [">0.2%", "not dead", "not op_mini all"],
-    "development": ["last 1 chrome version", "last 1 firefox version", "last 1 safari version"]
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.0.0",

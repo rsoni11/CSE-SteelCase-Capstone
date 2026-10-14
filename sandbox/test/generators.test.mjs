@@ -55,7 +55,7 @@ test('the baseline only ever draws the five constants.js SKUs', () => {
 
 test('uploader CSV has one row per carton under the headers the app reads', () => {
   const [plan] = generateSyntheticPlans(units, 1, 1);
-  const lines = planToUploaderCsv(plan).trim().split('\r\n');
+  const lines = planToUploaderCsv(plan).trim().split(/\r?\n/);
   assert.equal(lines[0], 'Length,Width,Height,# Pieces,Stop,Weight');
   assert.equal(lines.length, plan.boxes.length + 1);
 });
